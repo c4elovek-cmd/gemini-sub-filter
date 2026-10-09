@@ -1,5 +1,5 @@
 /**
- * Cloudflare Pages Function — https://example.com/workgemini
+ * Cloudflare Pages Function — https://c4elovek.online/workgemini
  *
  * Отдаёт отфильтрованную подписку в двух форматах, выбирая по User-Agent:
  *   clash/mihomo/verge/stash/Happ -> Clash-конфиг (YAML)
@@ -19,9 +19,32 @@
  */
 
 const KV_PREFIX = "wg_";
-const IP_TTL_SECONDS = 90 * 24 * 3600; // 90 дней
+// Сколько помним IP, введший пароль. Раньше было 90 дней — слишком много:
+// любой, кто попал на этот IP (общий Wi-Fi, гостиница, NAT оператора,
+// сосед по роутеру), забирал подписку без пароля три месяца. Недели хватает,
+// чтобы планшет и компьютер не переспрашивали пароль каждый день.
+const IP_TTL_SECONDS = 14 * 24 * 3600;
 const FAIL_TTL_SECONDS = 600;          // окно счётчика неудач
 const MAX_FAILS = 10;
+
+// Журнал доступа: без него утечку подписки невозможно заметить.
+const LOG_KEY = KV_PREFIX + "accesslog";
+const LOG_MAX = 200;
+const LOG_TTL_SECONDS = 30 * 24 * 3600;
+
+async function accessLog(env, record) {
+  try {
+    if (!env || !env.LINKS) return;
+    const prev = await env.LINKS.get(LOG_KEY, "text");
+    const list = prev ? JSON.parse(prev) : [];
+    list.push({ at: new Date().toISOString(), ...record });
+    await env.LINKS.put(LOG_KEY, JSON.stringify(list.slice(-LOG_MAX)), {
+      expirationTtl: LOG_TTL_SECONDS,
+    });
+  } catch {
+    // Журнал не должен ломать выдачу подписки.
+  }
+}
 
 // --- пароль ---------------------------------------------------------------
 
@@ -508,7 +531,7 @@ function buildHapp(servers) {
   const autoOutbounds = servers.map((s, i) => toV2RayOutbound(s, "gemini-" + (i + 1)));
 
   const auto = {
-    remarks: "⚡ example.com | Автовыбор",
+    remarks: "⚡ c4elovek.online | Автовыбор",
     dns: {
       servers: ["https://1.1.1.1/dns-query", "1.1.1.1", "8.8.8.8"],
       queryStrategy: "UseIPv4",
@@ -611,6 +634,12 @@ export async function onRequest(context) {
   if (!allowedByIp && !allowedByKey) {
     const fails = await readFails(env, ip);
     if (fails >= MAX_FAILS) {
+      await accessLog(env, {
+        outcome: "rate-limited",
+        ip,
+        ua: request.headers.get("User-Agent") || "",
+        fails,
+      });
       return new Response(
         "Слишком много попыток. Подождите 10 минут.\n",
         {
@@ -625,6 +654,14 @@ export async function onRequest(context) {
       "Введите пароль на странице:\n" +
       new URL("/gemini/", url).toString() + "\n";
 
+    await accessLog(env, {
+      outcome: "bad-password",
+      ip,
+      ua: request.headers.get("User-Agent") || "",
+      url: url.pathname + url.search,
+      fails: fails + 1,
+    });
+
     return new Response(body, {
       status: 401,
       headers: {
@@ -634,7 +671,7 @@ export async function onRequest(context) {
         // Браузер покажет штатное окно ввода. VPN-клиенты его проигнорируют,
         // им нужен пароль прямо в ссылке — см. первую строку.
         ...(wantsBrowser(request)
-          ? { "WWW-Authenticate": 'Basic realm="example.com/workgemini"' }
+          ? { "WWW-Authenticate": 'Basic realm="c4elovek.online/workgemini"' }
           : {}),
       },
     });
@@ -694,6 +731,29 @@ export async function onRequest(context) {
   const reply = (body, contentType) =>
     new Response(body, { status: 200, headers: { ...base, "Content-Type": contentType } });
 
+// Служебная выкачка для скрипта: ?gz=1 просит сжатие. Клиентам оно нельзя —
+// часть из них не распаковывает тело само, а скрипту нужно: через домашний
+// канал большие ответы не доезжают, в сжатом виде доходят.
+const wantsGzip = url.searchParams.get("gz") === "1";
+
+async function replyMaybeGzip(body, contentType) {
+  if (!wantsGzip) return reply(body, contentType);
+  try {
+    const stream = new Blob([body]).stream().pipeThrough(new CompressionStream("gzip"));
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        ...base,
+        "Content-Type": contentType,
+        "Content-Encoding": "gzip",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+      },
+    });
+  } catch {
+    return reply(body, contentType);
+  }
+  }
+
   try {
     let body;
     let contentType;
@@ -711,7 +771,21 @@ export async function onRequest(context) {
       contentType = "text/yaml; charset=utf-8";
     }
 
-    return reply(body, contentType);
+    // Служебная выкачка для скрипта в журнал не пишем: это не выдача
+    // подписки человеку, а наполнение зеркала.
+    if (!wantsGzip) {
+      await accessLog(env, {
+        outcome: "delivered",
+        ip,
+        ua: request.headers.get("User-Agent") || "",
+        format,
+        bytes: body.length,
+        servers: servers.length,
+        byPassword: allowedByKey,
+      });
+    }
+
+    return replyMaybeGzip(body, contentType);
   } catch {
     return next();
   }

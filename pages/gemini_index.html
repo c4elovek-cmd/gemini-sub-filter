@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="description" content="Подписка VPN, отфильтрованная по фактической доступности Google Gemini">
 
-    <title>Подписка для Gemini | example.com</title>
+    <title>Подписка для Gemini | c4elovek</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -246,6 +246,11 @@
                     </div>
                 </div>
 
+                <!-- зеркало: заполняется из подписки, если оно есть -->
+                <p class="section-title" id="mirror-title" hidden>Зеркало на GitHub</p>
+                <div class="links" id="mirror-links"></div>
+                </div>
+
                 <!-- серверы -->
                 <div class="server-head">
                     <p class="section-title">Серверы</p>
@@ -258,6 +263,11 @@
                 <input type="search" id="search" placeholder="Найти по названию или стране" aria-label="Поиск сервера" style="margin-bottom:12px">
                 <div class="chips" id="chips"></div>
                 <ul class="servers" id="servers"></ul>
+
+                <p class="note" id="mirror-note" hidden>
+                    Зеркало лежит на GitHub и не проверяет пароль — работает там, где
+                    Cloudflare недоступен. Храните ссылку в тайне: это весь уровень защиты.
+                </p>
 
                 <p class="note">
                     Серверы отбираются автоматически при входе в компьютер: через каждый адрес
@@ -471,6 +481,39 @@
             }
         }
 
+        // Ссылки зеркала приезжают из подписки: у них нет пароля, и они нужны
+        // только там, где основной адрес недоступен.
+        function renderMirror(mirror) {
+            const box = document.getElementById('mirror-links');
+            const note = document.getElementById('mirror-note');
+            const title = document.getElementById('mirror-title');
+            if (!box || !mirror) return;
+
+            const names = { happ: 'Happ', base64: 'v2rayNG и другие', clash: 'Clash / Mihomo' };
+            const found = Object.keys(names).filter((k) => mirror[k]);
+            if (!found.length) return;
+
+            box.innerHTML = '';
+            found.forEach((k) => {
+                const row = document.createElement('div');
+                row.className = 'link-row';
+                row.innerHTML =
+                    '<div class="link-info">' +
+                        '<div class="link-name">' + escapeHtml(names[k]) + '</div>' +
+                        '<div class="link-url" data-mirror="' + escapeHtml(mirror[k]) + '"></div>' +
+                    '</div>' +
+                    '<button class="copy" data-mirror="' + escapeHtml(mirror[k]) + '">Копировать</button>';
+                box.appendChild(row);
+                row.querySelector('.link-url').textContent = mirror[k];
+                // Кнопки зеркала появляются позже, чем вешаются общие
+                // обработчики внизу файла, поэтому свой назначаем здесь.
+                const btn = row.querySelector('.copy');
+                btn.addEventListener('click', () => copyText(mirror[k], btn));
+            });
+            if (title) title.hidden = false;
+            if (note) note.hidden = false;
+        }
+
         function apply() {
             const q = document.getElementById('search').value.trim().toLowerCase();
             filtered = sortServers(SERVERS.filter((s) => {
@@ -542,6 +585,7 @@
             // Порядок из подписки уже разложен по странам — пересортировываем
             // только когда явно попросили «по скорости».
             SERVERS = (data.servers || []).slice();
+            renderMirror(data.mirror);
             document.getElementById('sort-country').setAttribute('aria-pressed', String(sortMode === 'country'));
             document.getElementById('sort-speed').setAttribute('aria-pressed', String(sortMode === 'speed'));
             renderChips();
@@ -571,6 +615,12 @@
 
         for (const btn of document.querySelectorAll('.copy')) {
             btn.addEventListener('click', () => {
+                // У основных ссылок ссылка лежит в элементе с id, у зеркала —
+                // прямо в data-mirror, потому что блок появляется позже.
+                if (btn.dataset.mirror) {
+                    copyText(btn.dataset.mirror, btn);
+                    return;
+                }
                 const el = document.getElementById(btn.dataset.target);
                 if (el) copyText(el.textContent, btn);
             });

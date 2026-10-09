@@ -48,6 +48,22 @@ def gh(args: list[str]) -> subprocess.CompletedProcess:
     )
 
 
+def gh_bytes(args: list[str]) -> subprocess.CompletedProcess:
+    """То же, что gh, но без преобразования окончаний строк.
+
+    Нужна для побайтового сравнения с файлом на диске: в текстовом режиме
+    Windows молча переводит CRLF в LF, и файл всегда считается изменившимся,
+    даже когда он байт в байт тот же. Из-за этого каждый прогон делал лишний
+    коммит без единой правки.
+    """
+    return subprocess.run(
+        ["gh", *args],
+        capture_output=True,
+        check=False,
+        creationflags=NO_WINDOW,
+    )
+
+
 def gh_token() -> str:
     return (gh(["auth", "token"]).stdout or "").strip()
 
@@ -76,12 +92,14 @@ def main() -> int:
         head = gh(["api", f"{api}/{dst}?ref={args.branch}", "-q", ".sha"])
         sha = (head.stdout or "").strip()
         if head.returncode == 0 and sha:
-            cur = gh([
+            # Забираем файл целиком и сравниваем байты. Запрос с -q .content
+            # вместе с raw-заголовком невалиден: gh отдаёт код 1 и пустой
+            # вывод, из-за чего любой файл всегда считался изменённым.
+            cur = gh_bytes([
                 "api", f"{api}/{dst}?ref={args.branch}",
-                "-q", ".content",
                 "--header", "Accept: application/vnd.github.raw",
             ])
-            if cur.returncode == 0 and cur.stdout.encode("utf-8", "surrogateescape") == body:
+            if cur.returncode == 0 and cur.stdout == body:
                 print(f"  {dst}: без изменений")
                 continue
 

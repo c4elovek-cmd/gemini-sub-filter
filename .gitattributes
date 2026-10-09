@@ -1,0 +1,12 @@
+# PowerShell-скрипты содержат кириллицу в комментариях и сообщениях.
+# Windows PowerShell 5.1 читает UTF-8 без BOM как ANSI и портит текст,
+# поэтому у них остаётся BOM.
+*.ps1 -text working-tree-encoding=UTF-8
+
+# Остальное держим в LF, чтобы диффы не распухали на Windows
+*.py text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.html text eol=lf
+*.vbs text eol=crlf

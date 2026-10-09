@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="Подписка VPN, отфильтрованная по фактической доступности Google Gemini">
+
+    <title>Подписка для Gemini | example.com</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rubik+Maze&display=swap" rel="stylesheet">
+
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; -webkit-tap-highlight-color: transparent; }
+        /* Атрибут hidden слабее любого display в CSS — усиливаем, иначе
+           скрытые блоки остаются видимыми до ввода пароля. */
+        [hidden] { display: none !important; }
+
+        body {
+            background-color: #000000; color: #ffffff; min-height: 100vh;
+            overflow-x: hidden; position: relative; padding: 40px 20px;
+            display: flex; flex-direction: column; align-items: center;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        ::selection { background: rgba(255,255,255,0.18); color: #fff; }
+
+        .orb-1, .orb-2 { position: fixed; border-radius: 50%; filter: blur(50px); z-index: 0; opacity: 0.8; pointer-events: none; }
+        .orb-1 { width: 320px; height: 320px; background: linear-gradient(135deg, #ffffff, #333333); top: 0; left: 0; }
+        .orb-2 { width: 380px; height: 380px; background: linear-gradient(135deg, #777777, #111111); top: 0; left: 0; }
+
+        .wrap {
+            position: relative; z-index: 2; width: 100%; max-width: 560px;
+            margin: auto; border-radius: 32px; padding: 2px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.9);
+        }
+        .wrap::before {
+            content: ""; position: absolute; inset: 0; border-radius: 32px; padding: 2px;
+            background: linear-gradient(135deg, #ffffff 0%, #111111 50%, #ffffff 100%);
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            mask-composite: exclude; pointer-events: none;
+        }
+        .card {
+            background: rgba(255,255,255,0.03); backdrop-filter: blur(40px);
+            border-radius: 30px; border: 1px solid rgba(255,255,255,0.08);
+            padding: 34px 26px 30px; width: 100%;
+        }
+
+        h1 { font-family: "Rubik Maze", system-ui, sans-serif; font-size: 25px; font-weight: normal; }
+        .deck { font-size: 14px; color: #a3a3a3; margin-top: 6px; }
+
+        /* ---------- вход по паролю ---------- */
+        .gate { margin-top: 26px; }
+        .gate-error { margin-top: 12px; font-size: 13px; color: #ff7b7b; }
+        input[type="password"], input[type="search"] {
+            width: 100%; padding: 14px; border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.5);
+            color: #fff; outline: none; font-size: 15px; transition: border-color 0.25s, background 0.25s;
+        }
+        input::placeholder { color: #6f6f6f; }
+        input:focus { border-color: rgba(255,255,255,0.75); background: rgba(0,0,0,0.65); }
+        input[type="search"]::-webkit-search-cancel-button { filter: invert(1); opacity: 0.5; cursor: pointer; }
+
+        .btn {
+            width: 100%; margin-top: 10px; padding: 15px; border: none; border-radius: 14px;
+            background: #fff; color: #000; font-size: 15px; font-weight: bold; cursor: pointer;
+            font-family: sans-serif; transition: transform 0.15s, opacity 0.2s;
+        }
+        .btn:active { transform: scale(0.985); }
+        .btn:disabled { opacity: 0.6; cursor: default; }
+        .btn:focus-visible, .copy:focus-visible, .chip:focus-visible, .row:focus-visible {
+            outline: 2px solid #fff; outline-offset: 2px;
+        }
+
+        /* ---------- сводка подписки ---------- */
+        .facts { margin-top: 26px; border-top: 1px solid rgba(255,255,255,0.08); }
+        .fact {
+            display: flex; align-items: baseline; gap: 14px;
+            padding: 11px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+        .fact dt { font-size: 13px; color: #a3a3a3; flex: 0 0 108px; }
+        .fact dd { font-size: 14px; text-align: right; margin-left: auto; font-variant-numeric: tabular-nums; }
+        .fact dd b { font-weight: bold; }
+        .fact dd .sub { color: #7a7a7a; font-size: 12px; }
+        .live { display: inline-flex; align-items: center; gap: 6px; }
+        .dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 0 3px rgba(74,222,128,0.15); }
+
+        /* ---------- ссылки подписки ---------- */
+        .section-title {
+            font-size: 12px; color: #a3a3a3; margin: 26px 0 10px;
+        }
+        .links { display: flex; flex-direction: column; gap: 8px; }
+        .link-row {
+            display: flex; align-items: center; gap: 12px;
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 14px; padding: 11px 13px;
+        }
+        .link-info { flex: 1; min-width: 0; }
+        .link-name { font-size: 14px; }
+        .link-for { font-size: 11px; color: #8a8a8a; margin-top: 2px; }
+        .link-url { font-size: 11px; color: #6f6f6f; margin-top: 4px; word-break: break-all; font-family: ui-monospace, Menlo, Consolas, monospace; }
+        .copy {
+            background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+            color: #fff; padding: 8px 13px; border-radius: 10px; font-size: 13px;
+            cursor: pointer; font-family: sans-serif; flex-shrink: 0; transition: background 0.2s, color 0.2s;
+        }
+        .copy:hover { background: rgba(255,255,255,0.18); }
+        .copy.done { background: #fff; color: #000; }
+
+        /* ---------- серверы ---------- */
+        .server-head {
+            display: flex; align-items: center; gap: 10px; margin: 30px 0 12px;
+        }
+        .server-head .section-title { margin: 0; flex: 1; }
+        .server-count { font-size: 12px; color: #8a8a8a; font-variant-numeric: tabular-nums; }
+
+        /* Переключатель сортировки: по стране или по скорости */
+        .sort {
+            display: flex; gap: 2px; padding: 2px; border-radius: 999px;
+            background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+            flex-shrink: 0;
+        }
+        .sort button {
+            background: none; border: 0; border-radius: 999px; padding: 4px 11px;
+            font-size: 12px; color: #8a8a8a; cursor: pointer; font-family: sans-serif;
+            transition: background 0.2s, color 0.2s; white-space: nowrap;
+        }
+        .sort button:hover { color: #d4d4d4; }
+        .sort button[aria-pressed="true"] { background: #fff; color: #000; }
+
+        .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+        .chip {
+            background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 999px; padding: 5px 11px; font-size: 12px; color: #d4d4d4;
+            cursor: pointer; font-family: sans-serif; transition: background 0.2s, border-color 0.2s;
+        }
+        .chip b { font-weight: bold; color: #fff; font-variant-numeric: tabular-nums; }
+        .chip:hover { background: rgba(255,255,255,0.12); }
+        .chip[aria-pressed="true"] { background: #fff; color: #000; border-color: #fff; }
+        .chip[aria-pressed="true"] b { color: #000; }
+
+        .servers {
+            list-style: none; max-height: 396px; overflow-y: auto; overscroll-behavior: contain;
+            border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; background: rgba(0,0,0,0.35);
+        }
+        .servers::-webkit-scrollbar { width: 9px; }
+        .servers::-webkit-scrollbar-track { background: transparent; }
+        .servers::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 9px; border: 2px solid transparent; background-clip: content-box; }
+        .servers::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); background-clip: content-box; }
+
+        .row {
+            display: flex; align-items: center; gap: 12px;
+            padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .row:last-child { border-bottom: none; }
+        .row:hover { background: rgba(255,255,255,0.045); }
+        .flag { font-size: 21px; line-height: 1; width: 28px; text-align: center; flex-shrink: 0; }
+        .row-main { flex: 1; min-width: 0; }
+        .row-name { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .row-sub { font-size: 11px; color: #8a8a8a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .row-ms { font-size: 12px; color: #a3a3a3; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+        .empty { padding: 26px 14px; text-align: center; color: #7a7a7a; font-size: 13px; }
+
+        .note { font-size: 12px; color: #6f6f6f; line-height: 1.65; margin-top: 22px; }
+        .back-link { display: inline-block; margin-top: 20px; color: #9ca3af; text-decoration: none; font-size: 14px; }
+        .back-link:hover { color: #fff; }
+        .link-btn {
+            display: block; margin: 14px auto 0; background: none; border: none;
+            color: #6f6f6f; font-size: 13px; cursor: pointer; font-family: sans-serif;
+            text-decoration: underline; text-underline-offset: 3px; transition: color 0.2s;
+        }
+        .link-btn:hover { color: #a3a3a3; }
+
+        /* Один момент движения: строки списка проявляются по очереди. */
+        @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+        .row { animation: rise 0.45s cubic-bezier(0.16, 1, 0.3, 1) both; }
+        @media (prefers-reduced-motion: reduce) {
+            .row { animation: none; }
+            * { transition: none !important; }
+        }
+
+        @media (max-width: 420px) {
+            .card { padding: 28px 18px 24px; }
+            .fact { flex-direction: column; gap: 3px; }
+            .fact dd { text-align: left; margin-left: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="orb-1"></div>
+    <div class="orb-2"></div>
+
+    <div class="wrap">
+        <div class="card">
+            <h1>Gemini</h1>
+            <p class="deck">Подписка, где Gemini реально открывается</p>
+
+            <!-- вход по паролю -->
+            <div class="gate" id="gate">
+                <input type="password" id="pass-input" placeholder="Пароль доступа" autocomplete="current-password" aria-label="Пароль доступа">
+                <button class="btn" id="unlock-btn">Получить ссылку</button>
+                <div class="gate-error" id="gate-error" hidden></div>
+            </div>
+
+            <div id="main" hidden>
+                <!-- сводка подписки -->
+                <dl class="facts" id="facts"></dl>
+
+                <!-- ссылки -->
+                <p class="section-title">Ссылки подписки</p>
+                <div class="links">
+                    <div class="link-row">
+                        <div class="link-info">
+                            <div class="link-name">Happ</div>
+                            <div class="link-for">для телефона и планшета, формат задан явно</div>
+                            <div class="link-url" id="url-happ"></div>
+                        </div>
+                        <button class="copy" data-target="url-happ">Копировать</button>
+                    </div>
+                    <div class="link-row">
+                        <div class="link-info">
+                            <div class="link-name">Универсальная</div>
+                            <div class="link-for">формат подбирается по приложению</div>
+                            <div class="link-url" id="url-auto"></div>
+                        </div>
+                        <button class="copy" data-target="url-auto">Копировать</button>
+                    </div>
+                    <div class="link-row">
+                        <div class="link-info">
+                            <div class="link-name">Clash / Mihomo</div>
+                            <div class="link-for">v2rayN, Verge, Stash, Karing, FlClash</div>
+                            <div class="link-url" id="url-clash"></div>
+                        </div>
+                        <button class="copy" data-target="url-clash">Копировать</button>
+                    </div>
+                    <div class="link-row">
+                        <div class="link-info">
+                            <div class="link-name">Base64 ссылки</div>
+                            <div class="link-for">v2rayNG, Happ, NekoBox, Streisand</div>
+                            <div class="link-url" id="url-base64"></div>
+                        </div>
+                        <button class="copy" data-target="url-base64">Копировать</button>
+                    </div>
+                </div>
+
+                <!-- серверы -->
+                <div class="server-head">
+                    <p class="section-title">Серверы</p>
+                    <span class="server-count" id="server-count"></span>
+                    <div class="sort" role="group" aria-label="Сортировка серверов">
+                        <button type="button" id="sort-country" aria-pressed="true">По стране</button>
+                        <button type="button" id="sort-speed" aria-pressed="false">По скорости</button>
+                    </div>
+                </div>
+                <input type="search" id="search" placeholder="Найти по названию или стране" aria-label="Поиск сервера" style="margin-bottom:12px">
+                <div class="chips" id="chips"></div>
+                <ul class="servers" id="servers"></ul>
+
+                <p class="note">
+                    Серверы отбираются автоматически при входе в компьютер: через каждый адрес
+                    поднимается туннель и делается запрос к Gemini. Отсеиваются и мёртвые серверы,
+                    и те, где Gemini закрыт по региону.
+                </p>
+
+                <a href="/" class="back-link">← На главную</a>
+                <button type="button" class="link-btn" id="logout">Сменить пароль</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const BASE = location.origin;
+
+        // Пароль, который человек только что ввёл. Он нужен, чтобы ссылка
+        // работала всегда: запоминание IP держится на адресе, а адрес у VPN
+        // меняется при каждом переподключении — и клиент начинает получать 401
+        // с ошибкой обновления подписки.
+        let KEY = '';
+
+        function subUrl(format) {
+            const key = KEY ? '/' + encodeURIComponent(KEY) : '';
+            return BASE + '/workgemini' + key + (format ? '?format=' + format : '');
+        }
+
+        // «9 лет 11 мес» читается быстрее, чем дата, но дату тоже показываем.
+        function untilExpiry(iso) {
+            if (!iso) return { main: '—', sub: '' };
+            const end = Date.parse(iso);
+            if (isNaN(end)) return { main: '—', sub: '' };
+
+            const date = new Date(end).toLocaleDateString('ru-RU', {
+                day: 'numeric', month: 'short', year: 'numeric'
+            });
+
+            const left = end - Date.now();
+            if (left <= 0) return { main: 'истекла', sub: date };
+            if (left < 24 * 3600 * 1000) return { main: 'меньше суток', sub: date };
+
+            const days = Math.floor(left / 86400000);
+            const years = Math.floor(days / 365);
+            const months = Math.floor((days % 365) / 30);
+            let main;
+            if (years >= 1) {
+                main = years + ' ' + plural(years, 'год', 'года', 'лет');
+                if (months) main += ' ' + months + ' ' + plural(months, 'месяц', 'месяца', 'месяцев');
+            } else if (months >= 1) {
+                main = months + ' ' + plural(months, 'месяц', 'месяца', 'месяцев');
+            } else {
+                main = days + ' ' + plural(days, 'день', 'дня', 'дней');
+            }
+            return { main, sub: date };
+        }
+
+        function plural(n, one, few, many) {
+            const m10 = n % 10, m100 = n % 100;
+            if (m10 === 1 && m100 !== 11) return one;
+            if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+            return many;
+        }
+
+        function bytes(n) {
+            if (!n) return '—';
+            const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+            let v = n, i = 0;
+            while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+            return v.toFixed(v >= 100 || i === 0 ? 0 : 1).replace('.', ',') + ' ' + units[i];
+        }
+
+        // Флаг из кода страны: буквы превращаются в региональные индикаторы.
+        function flag(cc) {
+            if (!cc || cc.length !== 2 || !/^[A-Za-z]{2}$/.test(cc)) return '🏳';
+            const base = 0x1F1E6 - 65;
+            return String.fromCodePoint(
+                base + cc.toUpperCase().charCodeAt(0),
+                base + cc.toUpperCase().charCodeAt(1)
+            );
+        }
+
+        // Название страны по коду — на языке браузера, без таблиц на 250 строк.
+        let regionNames = null;
+        try {
+            regionNames = new Intl.DisplayNames(['ru'], { type: 'region' });
+        } catch (e) { /* браузер не умеет */ }
+
+        const FALLBACK = {
+            NL: 'Нидерланды', DE: 'Германия', SE: 'Швеция', US: 'США', FI: 'Финляндия',
+            GB: 'Великобритания', PL: 'Польша', FR: 'Франция', ES: 'Испания', CH: 'Швейцария',
+            AL: 'Албания', TR: 'Турция', RO: 'Румыния', BR: 'Бразилия', CZ: 'Чехия',
+            LV: 'Латвия', EE: 'Эстония', KZ: 'Казахстан', HK: 'Гонконг', JP: 'Япония',
+            LT: 'Литва', IE: 'Ирландия', IT: 'Италия', IL: 'Израиль', AE: 'ОАЭ',
+            IN: 'Индия', TH: 'Таиланд', PT: 'Португалия', HU: 'Венгрия', GR: 'Греция',
+        };
+
+        function countryName(cc) {
+            if (!cc) return '';
+            if (regionNames) {
+                try { return regionNames.of(cc.toUpperCase()); } catch (e) { /* нет такого */ }
+            }
+            return FALLBACK[cc.toUpperCase()] || cc.toUpperCase();
+        }
+
+        // ---------- отрисовка ----------
+
+        let SERVERS = [];
+        let filtered = [];
+        let activeCountry = '';
+        // По умолчанию — как в самой подписке: по странам.
+        let sortMode = localStorage.getItem('wg_sort') || 'country';
+
+        function sortServers(list) {
+            if (sortMode === 'speed') {
+                return list.slice().sort((a, b) => (a.ms || 0) - (b.ms || 0));
+            }
+            return list;
+        }
+
+        function setSortMode(mode) {
+            sortMode = mode;
+            localStorage.setItem('wg_sort', mode);
+            document.getElementById('sort-country').setAttribute('aria-pressed', String(mode === 'country'));
+            document.getElementById('sort-speed').setAttribute('aria-pressed', String(mode === 'speed'));
+            apply();
+        }
+
+        function renderFacts(data) {
+            const sub = data.subscription || {};
+            const exp = untilExpiry(sub.expire_at);
+            const traffic = sub.traffic_limit
+                ? bytes(sub.traffic_used) + ' из ' + bytes(sub.traffic_limit)
+                : (sub.traffic_used ? bytes(sub.traffic_used) + ' · без лимита' : '—');
+
+            const rows = [
+                {
+                    label: 'Профиль',
+                    main: sub.title || '—',
+                    sub: sub.status ? 'status' : '',
+                    status: sub.status
+                },
+                { label: 'До истечения', main: exp.main, sub: exp.sub },
+                { label: 'Трафик', main: traffic },
+                {
+                    label: 'Устройства',
+                    main: sub.devices ? sub.devices + ' из ' + sub.device_limit : '—'
+                },
+                {
+                    label: 'Серверов',
+                    main: data.working + ' рабочих',
+                    sub: 'из ' + data.checked + ' проверено'
+                },
+                { label: 'Обновлено', main: humanAge(data.updated_at) }
+            ];
+
+            const box = document.getElementById('facts');
+            box.innerHTML = '';
+            for (const r of rows) {
+                const el = document.createElement('div');
+                el.className = 'fact';
+                const dd = r.main === '—'
+                    ? '<dd>—</dd>'
+                    : '<dd><b>' + escapeHtml(r.main) + '</b>' +
+                      (r.sub ? ' <span class="sub">' + escapeHtml(r.sub) + '</span>' : '') +
+                      (r.status ? ' <span class="sub">' + escapeHtml(r.status) + '</span>' : '') +
+                      '</dd>';
+                el.innerHTML = '<dt>' + escapeHtml(r.label) + '</dt>' + dd;
+                box.appendChild(el);
+            }
+        }
+
+        function humanAge(iso) {
+            if (!iso) return '—';
+            const t = Date.parse(iso);
+            if (isNaN(t)) return '—';
+            const mins = Math.floor((Date.now() - t) / 60000);
+            if (mins < 1) return 'только что';
+            if (mins < 60) return mins + ' ' + plural(mins, 'минуту', 'минуты', 'минут') + ' назад';
+            const h = Math.floor(mins / 60);
+            if (h < 24) return h + ' ' + plural(h, 'час', 'часа', 'часов') + ' назад';
+            const d = Math.floor(h / 24);
+            return d + ' ' + plural(d, 'день', 'дня', 'дней') + ' назад';
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"]/g, (c) =>
+                ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        }
+
+        function renderChips() {
+            const counts = {};
+            for (const s of SERVERS) {
+                const cc = (s.country || '').toUpperCase();
+                if (!cc) continue;
+                counts[cc] = (counts[cc] || 0) + 1;
+            }
+            const box = document.getElementById('chips');
+            box.innerHTML = '';
+            for (const cc of Object.keys(counts).sort()) {
+                const b = document.createElement('button');
+                b.className = 'chip';
+                b.type = 'button';
+                b.setAttribute('aria-pressed', String(cc === activeCountry));
+                b.innerHTML = flag(cc) + ' <b>' + counts[cc] + '</b> ' + escapeHtml(countryName(cc));
+                b.addEventListener('click', () => {
+                    activeCountry = activeCountry === cc ? '' : cc;
+                    renderChips();
+                    apply();
+                });
+                box.appendChild(b);
+            }
+        }
+
+        function apply() {
+            const q = document.getElementById('search').value.trim().toLowerCase();
+            filtered = sortServers(SERVERS.filter((s) => {
+                const cc = (s.country || '').toUpperCase();
+                if (activeCountry && cc !== activeCountry) return false;
+                if (!q) return true;
+                return (
+                    (s.provider || '').toLowerCase().includes(q) ||
+                    (s.name || '').toLowerCase().includes(q) ||
+                    countryName(cc).toLowerCase().includes(q) ||
+                    (s.addr || '').toLowerCase().includes(q)
+                );
+            }));
+
+            const list = document.getElementById('servers');
+            list.innerHTML = '';
+            document.getElementById('server-count').textContent =
+                filtered.length === SERVERS.length
+                    ? SERVERS.length + ' шт'
+                    : filtered.length + ' из ' + SERVERS.length;
+
+            if (!filtered.length) {
+                const li = document.createElement('li');
+                li.className = 'empty';
+                li.textContent = SERVERS.length ? 'Ничего не нашлось' : 'Данных пока нет';
+                list.appendChild(li);
+                return;
+            }
+
+            const frag = document.createDocumentFragment();
+            filtered.forEach((s, i) => {
+                const li = document.createElement('li');
+                li.className = 'row';
+                const cc = (s.country || '').toUpperCase();
+                const label = countryName(cc) || 'страна неизвестна';
+                const ms = s.ms ? (s.ms >= 1000
+                    ? (s.ms / 1000).toFixed(1).replace('.', ',') + ' с'
+                    : s.ms + ' мс') : '';
+                li.style.animationDelay = Math.min(i, 24) * 14 + 'ms';
+                li.innerHTML =
+                    '<span class="flag" aria-hidden="true">' + flag(cc) + '</span>' +
+                    '<span class="row-main">' +
+                        '<span class="row-name">' + escapeHtml(s.provider || s.name || s.addr) + '</span>' +
+                        '<span class="row-sub">' + escapeHtml(label) + ' · ' + escapeHtml(s.addr || '') + '</span>' +
+                    '</span>' +
+                    (ms ? '<span class="row-ms">' + ms + '</span>' : '');
+                frag.appendChild(li);
+            });
+            list.appendChild(frag);
+        }
+
+        async function load() {
+            let data;
+            try {
+                const res = await fetch('/workgemini/status?ts=' + Date.now(), { cache: 'no-store' });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                data = await res.json();
+            } catch (e) {
+                document.getElementById('server-count').textContent = '';
+                document.getElementById('chips').innerHTML = '';
+                const li = document.createElement('li');
+                li.className = 'empty';
+                li.textContent = 'Данные недоступны — обновите позже';
+                document.getElementById('servers').appendChild(li);
+                return;
+            }
+
+            renderFacts(data);
+            // Порядок из подписки уже разложен по странам — пересортировываем
+            // только когда явно попросили «по скорости».
+            SERVERS = (data.servers || []).slice();
+            document.getElementById('sort-country').setAttribute('aria-pressed', String(sortMode === 'country'));
+            document.getElementById('sort-speed').setAttribute('aria-pressed', String(sortMode === 'speed'));
+            renderChips();
+            apply();
+        }
+
+        // ---------- пароль и копирование ----------
+
+        async function copyText(text, btn) {
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch (e) {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); } catch (e2) {}
+                document.body.removeChild(ta);
+            }
+            const original = btn.textContent;
+            btn.textContent = 'Готово';
+            btn.classList.add('done');
+            setTimeout(() => { btn.textContent = original; btn.classList.remove('done'); }, 1400);
+        }
+
+        for (const btn of document.querySelectorAll('.copy')) {
+            btn.addEventListener('click', () => {
+                const el = document.getElementById(btn.dataset.target);
+                if (el) copyText(el.textContent, btn);
+            });
+        }
+
+        function unlockView(password) {
+            KEY = password || '';
+            try { localStorage.setItem('wg_key', KEY); } catch (e) {}
+
+            document.getElementById('gate').hidden = true;
+            document.getElementById('main').hidden = false;
+            document.getElementById('url-happ').textContent = subUrl('happ');
+            document.getElementById('url-auto').textContent = subUrl('');
+            document.getElementById('url-clash').textContent = subUrl('clash');
+            document.getElementById('url-base64').textContent = subUrl('base64');
+            load();
+        }
+
+        function showLocked(message) {
+            document.getElementById('gate').hidden = false;
+            document.getElementById('main').hidden = true;
+            const box = document.getElementById('gate-error');
+            box.textContent = message || '';
+            box.hidden = !message;
+        }
+
+        const submit = async () => {
+            const input = document.getElementById('pass-input');
+            const btn = document.getElementById('unlock-btn');
+            const password = input.value.trim();
+            if (!password) { showLocked('Введите пароль'); return; }
+
+            btn.disabled = true;
+            btn.textContent = 'Проверяю...';
+            try {
+                const res = await fetch('/gemini', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: password })
+                });
+                const data = await res.json().catch(() => ({}));
+
+                if (res.ok && data.ok) {
+                    try { localStorage.setItem('wg_unlocked', '1'); } catch (e) {}
+                    unlockView(password);
+                } else if (res.status === 429) {
+                    showLocked('Слишком много попыток. Подождите 10 минут.');
+                } else {
+                    showLocked('Неверный пароль');
+                    input.value = '';
+                    input.focus();
+                }
+            } catch (e) {
+                showLocked('Не удалось связаться с сервером');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Получить ссылку';
+            }
+        };
+
+        document.getElementById('unlock-btn').addEventListener('click', submit);
+        document.getElementById('pass-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') submit();
+        });
+        document.getElementById('search').addEventListener('input', apply);
+        document.getElementById('sort-country').addEventListener('click', () => setSortMode('country'));
+        document.getElementById('sort-speed').addEventListener('click', () => setSortMode('speed'));
+
+        document.getElementById('logout').addEventListener('click', () => {
+            // Чистим ключ на устройстве и возвращаем форму — так можно
+            // сменить пароль, если он поменялся в настройках Pages.
+            try { localStorage.removeItem('wg_key'); } catch (e) {}
+            KEY = '';
+            document.getElementById('main').hidden = true;
+            document.getElementById('gate').hidden = false;
+            const input = document.getElementById('pass-input');
+            input.value = '';
+            input.focus();
+        });
+
+        (async () => {
+            // Ссылки рабочие только с паролем: запоминание IP держится на
+            // адресе, а VPN меняет адрес при каждом переподключении. Поэтому
+            // на этой странице всегда нужен пароль, а не «зашёл с любого IP».
+            let saved = '';
+            try { saved = localStorage.getItem('wg_key') || ''; } catch (e) {}
+            if (saved) {
+                const ok = await fetch('/gemini?check=1', { cache: 'no-store' })
+                    .then(r => r.json())
+                    .catch(() => ({ allowed: false }));
+                if (ok.allowed) unlockView(saved);
+                else showLocked('');
+            }
+        })();
+    </script>
+</body>
+</html>

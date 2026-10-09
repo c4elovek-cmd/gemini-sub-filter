@@ -1,0 +1,71 @@
+{
+  "_комментарий": [
+    "Скопируй этот файл в config.json и подставь свои значения.",
+    "config.json в репозиторий НЕ коммить — в .gitignore он уже есть.",
+    "Токен Cloudflare храни не здесь, а в переменной окружения CF_TOKEN.",
+    "Пути до xray укажи свои: в v2rayN он лежит в bin\\xray, в v2rayNG — в assets."
+  ],
+
+  "subscription": {
+    "_комментарий": "Откуда забирать подписку со всеми серверами. Токен — из личного кабинета сервиса.",
+    "token": "ВСТАВЬ_СВОЙ_ТОКЕН",
+    "hwid": "ВСТАВЬ_СВОЙ_HWID_ИЛИ_ОСТАВЬ_ПУСТЫМ",
+    "api_url": "https://sub.example.com/api/sub/{token}",
+    "user_agent": "v2rayNG/1.11.1"
+  },
+
+  "check": {
+    "_комментарий": "Как проверять сервер. Проверка идёт через сам сервер: поднимается xray, через его SOCKS делается запрос к Gemini.",
+    "probe_url": "https://gemini.google.com/app",
+    "timeout_seconds": 15,
+    "startup_grace_seconds": 4,
+    "concurrency": 8,
+    "min_content_bytes": 20000,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "block_markers": [
+      "isn't available in your country",
+      "is not available in your country",
+      "not currently available in your country",
+      "isn't supported in your country",
+      "not supported in your country",
+      "Gemini isn't available",
+      "unavailable in your country"
+    ],
+    "good_markers": [
+      "Gemini"
+    ],
+    "accepted_status": [
+      200,
+      302
+    ],
+    "skip_tun_check": false
+  },
+
+  "cores": {
+    "_комментарий": "Абсолютные пути. На macOS/Linux пути другие, и потребуется адаптация скрипта.",
+    "xray": "ПУТЬ_К_XRAY.EXE",
+    "sing_box": "ПУТЬ_К_SING-BOX.EXE"
+  },
+
+  "publish": {
+    "_комментарий": "Куда складывать результат. Данные лежат в KV, а не файлами в репозитории: файлы репозитория Cloudflare Pages отдаёт как обычную статику по прямой ссылке, и пароль становитсяdecorativным.",
+    "enabled": true,
+    "mode": "kv",
+    "cloudflare_account_id": "ТВОЙ_ACCOUNT_ID",
+    "kv_namespace_id": "ТВОЙ_ID_NAMESPACE_KV",
+    "token_env": "CF_TOKEN",
+    "public_url": "https://example.com/workgemini",
+    "page_url": "https://example.com/gemini/",
+    "repo": "your-account/your-site-repo",
+    "branch": "main",
+    "legacy_data_files": [
+      "workgemini.txt",
+      "workgemini.meta.json",
+      "workgemini"
+    ]
+  },
+
+  "output": {
+    "dir": "out"
+  }
+}

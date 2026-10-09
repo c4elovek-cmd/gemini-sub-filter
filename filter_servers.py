@@ -9,7 +9,7 @@
      Gemini тем же путём, которым пойдёт реальный трафик.
   4. Оставляет только те серверы, где Gemini открылся нормально.
   5. Заливает результат в Cloudflare KV, откуда его отдаёт воркер
-     example.com/workgemini (Clash-конфиг или base64 — по User-Agent).
+     c4elovek.online/workgemini (Clash-конфиг или base64 — по User-Agent).
 
 Запуск вручную:  python filter_servers.py
 Только проверка без публикации:  python filter_servers.py --no-publish
@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import base64
+import gzip
 import json
 import os
 import random
@@ -888,6 +889,112 @@ def server_entry(server: Server, result: Result | None = None) -> dict:
     return entry
 
 
+def _fetch_gzipped(url: str, password: str, fmt: str, timeout: int = 90) -> str:
+    """Забирает выдачу сайта в сжатом виде и распаковывает.
+
+    Форматы строит не этот скрипт, а функция сайта: если собирать их здесь,
+    через месяц-другой две реализации разойдутся, и зеркало начнёт отдавать
+    не то же, что основная ссылка. Сжатие нужно потому, что через домашний
+    канал несжатые ответы не доезжают — обрывается примерно на 25 КБ.
+    """
+    sep = "&" if "?" in url else "?"
+    target = f"{url.rstrip('/')}/{password}{sep}format={fmt}&gz=1"
+    req = urllib.request.Request(target, headers={
+        "User-Agent": "gemini-sub-filter/1.0 (mirror)",
+        "Accept-Encoding": "gzip",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read()
+        encoding = (resp.headers.get("Content-Encoding") or "").lower()
+
+    # Слоёв может быть два: свой gzip функции плюс gzip на границе Cloudflare.
+    # Распаковываем, пока тело остаётся сжатым, и не ориентируемся на
+    # заголовок — он описывает только внешний слой.
+    for _ in range(3):
+        if data[:2] != b"\x1f\x8b":
+            break
+        data = gzip.decompress(data)
+    if encoding and "gzip" in encoding and data[:2] == b"\x1f\x8b":
+        raise RuntimeError("тело осталось сжатым после распаковки")
+    return data.decode("utf-8")
+
+
+def publish_mirror(cfg: dict) -> dict[str, str]:
+    """Кладёт выдачу в статическое зеркало и возвращает ссылки на форматы.
+
+    Зеркало нужно там, где Cloudflare недоступен: имя фильтруется в некоторых
+    сетях по HTTPS, и без VPN подписка не обновляется. Отдаётся оно секретным
+    gist, у которого имя каждого файла — случайный токен.
+
+    Чего зеркало НЕ делает: не проверяет пароль. Статика не умеет авторизовывать,
+    поэтому защита держится только на невозможности угадать ссылку. Это запасной
+    путь, а не основной: как только Cloudflare доступен, лучше основная ссылка.
+    """
+    mirror = cfg.get("mirror") or {}
+    if not mirror.get("enabled"):
+        return {}
+
+    gist_id = mirror.get("gist_id", "")
+    template = mirror.get("raw_url_template", "")
+    files = mirror.get("files", {})
+    password = os.environ.get("WG_PASSWORD", "").strip() or mirror.get("password", "")
+    public_url = cfg["publish"]["public_url"]
+
+    missing = [n for n, v in (("gist_id", gist_id), ("raw_url_template", template),
+                              ("files", files), ("пароль сайта", password)) if not v]
+    if missing:
+        log(f"  ЗЕРКАЛО ПРОПУЩЕНО — не задано: {', '.join(missing)}")
+        log("  Пароль сайта: переменная WG_PASSWORD или mirror.password в config.json")
+        return {}
+
+    token = subprocess.run(
+        ["gh", "auth", "token"], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", creationflags=NO_WINDOW,
+    ).stdout.strip()
+    if not token:
+        log("  ЗЕРКАЛО ПРОПУЩЕНО — нет авторизации gh (gh auth login)")
+        return {}
+
+    api = f"https://api.github.com/gists/{gist_id}"
+    payload: dict[str, dict] = {}
+    urls: dict[str, str] = {}
+
+    for fmt, filename in files.items():
+        try:
+            body = _fetch_gzipped(public_url, password, fmt)
+        except Exception as exc:  # noqa: BLE001
+            log(f"  ЗЕРКАЛО '{fmt}': не забрал выдачу — {exc}")
+            continue
+        payload[filename] = {"content": body}
+        urls[fmt] = f"{template}{filename}"
+        log(f"  ЗЕРКАЛО '{fmt}': {filename} ({len(body)} Б)")
+
+    if not payload:
+        log("  ЗЕРКАЛО ПРОПУЩЕНО — ни один формат не забрался")
+        return {}
+
+    # Отправка крупная (Happ-файл под четверть мегабайта), а канал бывает
+    # рваный — DNS отваливается на разговоре. Поэтому несколько попыток.
+    data = json.dumps(payload).encode("utf-8")
+    for attempt in range(3):
+        req = urllib.request.Request(api, data=data, method="PATCH")
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("User-Agent", "gemini-sub-filter")
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                if resp.status == 200:
+                    log(f"  ЗЕРКАЛО обновлено: ок ({len(payload)} файла)")
+                    return urls
+        except Exception as exc:  # noqa: BLE001
+            log(f"  ЗЕРКАЛО: попытка {attempt + 1} не вышла — {exc}")
+            time.sleep(3 * (attempt + 1))
+
+    log("  ЗЕРКАЛО: не обновилось, зеркало осталось с прошлым содержимым")
+    return {}
+
+
 def publish(cfg: dict, links: list[str], meta: dict) -> None:
     """Кладёт отфильтрованную подписку в Cloudflare KV.
 
@@ -932,6 +1039,17 @@ def publish(cfg: dict, links: list[str], meta: dict) -> None:
     log(f"Публикую в Cloudflare KV ({len(links)} серверов)...")
     ok_sub = put("sub", raw.encode("utf-8"))
     log(f"  KV 'sub': {'ок' if ok_sub else 'провал'} ({len(raw)} Б)")
+
+    # Зеркало обновляем до meta, чтобы в meta сразу лежали свежие ссылки,
+    # а страница показала их следующей загрузкой.
+    log("Обновляю зеркало...")
+    mirror_urls = publish_mirror(cfg)
+    if mirror_urls:
+        meta_full["mirror"] = mirror_urls
+        meta_full["mirror_note"] = (
+            "Статическое зеркало без пароля: работает там, где Cloudflare "
+            "недоступен. Храните ссылку в тайне — это весь уровень защиты."
+        )
 
     ok_meta = put("meta", json.dumps(meta_full, ensure_ascii=False, indent=2).encode("utf-8"))
     log(f"  KV 'meta': {'ок' if ok_meta else 'провал'}")

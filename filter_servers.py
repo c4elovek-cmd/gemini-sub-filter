@@ -681,12 +681,42 @@ class Result:
     exit_ip: str = ""
 
 
+def _probe_gemini(socks_port: int, check: dict, body_path: Path, timeout: int) -> tuple[int, int, str]:
+    """Спрашивает Gemini через SOCKS. Возвращает (код, размер тела, текст)."""
+    # Google отвечает 429, когда по нему долбят сразу много адресов.
+    # Это не значит, что сервер плохой, поэтому пробуем ещё раз.
+    status = 0
+    for attempt in range(2):
+        status = _curl(
+            socks_port,
+            check["probe_url"],
+            body_path,
+            timeout,
+            accept=check["user_agent"],
+        )
+        if status != 429:
+            break
+        if attempt == 0:
+            time.sleep(2.5)
+
+    size = body_path.stat().st_size if body_path.exists() else 0
+    text = body_path.read_text(encoding="utf-8", errors="replace") if size else ""
+    return status, size, text.lower()
+
+
 def check_server(server: Server, cfg: dict, xray: Path, allowed: set[str]) -> Result:
     """Поднимает xray на этом сервере и проверяет, откроется ли Gemini.
 
-    Порядок важен. HTML страницы Gemini одинаков для любой страны — блокировка
-    региона происходит после авторизации и в разметке не видна. Поэтому сначала
-    смотрим страну выхода, и только потом подтверждаем, что /app реально отвечает.
+    Порядок шагов выбран из-за лимитов геосервиса, а не из логики. Региональная
+    блокировка в разметке не видна: русский и немецкий выходы отдают одинаковый
+    200 OK на /app, /chat и robots.txt. Единственный способ её увидеть — страна
+    выхода, но геосервисы отдают бесплатные запросы десятками в минуту, и на
+    321 адресах половина запросов отваливалась. Из-за этого в прошлый раз
+    151 сервер выпал на гео, не спросив у Gemini ничего.
+
+    Поэтому сначала спрашиваем сам Gemini: это один запрос на сервер и сразу
+    отсекает мёртвые. Гео спрашиваем только у тех, кто ответил 200 — таких
+    около сотни, лимит перестаёт мешать, и страна определяется почти всегда.
     """
     check = cfg["check"]
     timeout = int(check["timeout_seconds"])
@@ -717,80 +747,58 @@ def check_server(server: Server, cfg: dict, xray: Path, allowed: set[str]) -> Re
 
             started = time.monotonic()
 
-            # --- шаг 1: страна выхода
-            country, exit_ip = probe_country(socks_port, timeout, tmp)
-            if not country:
-                return Result(
-                    server, False, "не удалось определить страну выхода", 0,
-                    exit_ip=exit_ip,
-                )
-            geo_ms = int((time.monotonic() - started) * 1000)
-
-            if allowed and country not in allowed:
-                return Result(
-                    server, False, f"страна {country} — Gemini недоступен", geo_ms,
-                    country=country, exit_ip=exit_ip,
-                )
-
-            # --- шаг 2: сам Gemini открывается
+            # --- шаг 1: открывается ли Gemini вообще
             body_path = tmp / "probe.html"
-
-            # Google отвечает 429, когда по нему долбят сразу много адресов.
-            # Это не значит, что сервер плохой, поэтому пробуем ещё раз.
-            status = 0
-            for attempt in range(2):
-                try:
-                    status = _curl(
-                        socks_port,
-                        check["probe_url"],
-                        body_path,
-                        timeout,
-                        accept=check["user_agent"],
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    return Result(
-                        server, False, f"ошибка запроса: {exc}", geo_ms,
-                        country=country, exit_ip=exit_ip,
-                    )
-                if status != 429:
-                    break
-                if attempt == 0:
-                    time.sleep(2.5)
+            try:
+                status, size, low = _probe_gemini(socks_port, check, body_path, timeout)
+            except Exception as exc:  # noqa: BLE001
+                return Result(server, False, f"ошибка запроса: {exc}", 0, status=0)
 
             elapsed = int((time.monotonic() - started) * 1000)
 
             if proc.poll() is not None:
-                return Result(
-                    server, False, "xray упал", elapsed,
-                    country=country, exit_ip=exit_ip,
-                )
+                return Result(server, False, "xray упал", elapsed, status=status)
 
             if status not in check["accepted_status"]:
                 return Result(
                     server, False, f"Gemini ответил HTTP {status}", elapsed,
-                    status=status, country=country, exit_ip=exit_ip,
+                    status=status,
                 )
-
-            size = body_path.stat().st_size if body_path.exists() else 0
-            text = body_path.read_text(encoding="utf-8", errors="replace") if size else ""
-            low = text.lower()
 
             for marker in check["block_markers"]:
                 if marker.lower() in low:
                     return Result(
                         server, False, "Gemini заблокирован регионом", elapsed,
-                        status=status, country=country, exit_ip=exit_ip,
+                        status=status,
                     )
 
             if size < int(check["min_content_bytes"]):
                 return Result(
                     server, False, f"мало данных ({size} Б)", elapsed,
-                    status=status, country=country, exit_ip=exit_ip,
+                    status=status,
                 )
 
             if not any(m.lower() in low for m in check["good_markers"]):
                 return Result(
                     server, False, "нет маркера Gemini в ответе", elapsed,
+                    status=status,
+                )
+
+            # --- шаг 2: страна выхода, но только для тех, кто уже ответил
+            country, exit_ip = probe_country(socks_port, timeout, tmp)
+
+            if not country:
+                # Gemini отдал настоящую страницу — сервер работает. Регион не
+                # проверен, но выбрасывать рабочий сервер из-за лимита геосервиса
+                # хуже, чем оставить одну непроверенную страну.
+                return Result(
+                    server, True, "страна не определена, но Gemini ответил", elapsed,
+                    status=status, country="", exit_ip=exit_ip,
+                )
+
+            if allowed and country not in allowed:
+                return Result(
+                    server, False, f"страна {country} — Gemini недоступен", elapsed,
                     status=status, country=country, exit_ip=exit_ip,
                 )
 

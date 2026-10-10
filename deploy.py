@@ -70,7 +70,7 @@ def gh_token() -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Залить статику сайта в репозиторий Pages")
-    ap.add_argument("--repo", default="your-account/your-site-repo")
+    ap.add_argument("--repo", default="c4elovek-cmd/BiographyWebsite")
     ap.add_argument("--branch", default="main")
     ap.add_argument("--check", action="store_true", help="ничего не коммитить, только показать")
     args = ap.parse_args()
@@ -136,8 +136,8 @@ def main() -> int:
         print(f"  {dst}: закоммичено {data['commit']['sha'][:10]}")
 
     print("\nГотово. Cloudflare Pages передеплоит автоматически (~2 минуты).")
-    print(f"  Подписка: https://example.com/workgemini")
-    print(f"  Страница: https://example.com/gemini/")
+    print(f"  Подписка: https://c4elovek.online/workgemini")
+    print(f"  Страница: https://c4elovek.online/gemini/")
 
     # Проверяем, доехало ли
     for _ in range(10):

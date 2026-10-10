@@ -30,6 +30,20 @@
         .orb-1 { width: 320px; height: 320px; background: linear-gradient(135deg, #ffffff, #333333); top: 0; left: 0; }
         .orb-2 { width: 380px; height: 380px; background: linear-gradient(135deg, #777777, #111111); top: 0; left: 0; }
 
+        /* ---------- сетка с искажением под курсором ----------
+           Полотно лежит под содержимым и не перехватывает клики:
+           указатель должен доезжать до ссылок и полей ввода. */
+        #grid-canvas {
+            position: fixed; inset: 0; width: 100%; height: 100%;
+            z-index: 0; pointer-events: none;
+        }
+        /* Пока анимация не идёт, полотно скрыто: страница длинная,
+           а перерисовка кадра стоит батареи. */
+        #grid-canvas[hidden] { display: none; }
+        @media (prefers-reduced-motion: reduce) {
+            #grid-canvas { display: none; }
+        }
+
         .wrap {
             position: relative; z-index: 2; width: 100%; max-width: 560px;
             margin: auto; border-radius: 32px; padding: 2px;
@@ -131,6 +145,23 @@
         .sort button:hover { color: #d4d4d4; }
         .sort button[aria-pressed="true"] { background: #fff; color: #000; }
 
+        /* Переключатель группировки по странам. Обведен рамкой, а не залит,
+           чтобы не путать с переключателем сортировки: сортировка меняет вид
+           страницы, группировка — содержимое подписки. */
+        .toggle {
+            background: none; border: 1px solid rgba(255,255,255,0.18);
+            border-radius: 999px; padding: 5px 12px; font-size: 12px;
+            color: #8a8a8a; cursor: pointer; font-family: sans-serif;
+            white-space: nowrap; flex-shrink: 0;
+            transition: background 0.2s, color 0.2s, border-color 0.2s;
+        }
+        .toggle:hover { color: #d4d4d4; border-color: rgba(255,255,255,0.35); }
+        .toggle[aria-pressed="true"] {
+            background: rgba(255,255,255,0.14); color: #fff;
+            border-color: rgba(255,255,255,0.5);
+        }
+        .toggle[disabled] { opacity: 0.5; cursor: default; }
+
         .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
         .chip {
             background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
@@ -157,7 +188,12 @@
         }
         .row:last-child { border-bottom: none; }
         .row:hover { background: rgba(255,255,255,0.045); }
-        .flag { font-size: 21px; line-height: 1; width: 28px; text-align: center; flex-shrink: 0; }
+        /* Флаг-эмодзи — тоже иконка, поэтому круглая подложка. Сам флаг
+           прямоугольный, круглым выглядит значок вокруг него. */
+        .flag { font-size: 18px; line-height: 1; width: 32px; height: 32px; border-radius: 50%;
+                background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+                display: inline-flex; align-items: center; justify-content: center;
+                text-align: center; flex-shrink: 0; }
         .row-main { flex: 1; min-width: 0; }
         .row-name { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .row-sub { font-size: 11px; color: #8a8a8a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -190,6 +226,7 @@
     </style>
 </head>
 <body>
+    <canvas id="grid-canvas" hidden></canvas>
     <div class="orb-1"></div>
     <div class="orb-2"></div>
 
@@ -238,8 +275,8 @@
                     </div>
                     <div class="link-row">
                         <div class="link-info">
-                            <div class="link-name">Base64 ссылки</div>
-                            <div class="link-for">v2rayNG, Happ, NekoBox, Streisand</div>
+                            <div class="link-name">Обычные ссылки</div>
+                            <div class="link-for">v2rayNG, NekoBox, Streisand, Hiddify — подходит всем</div>
                             <div class="link-url" id="url-base64"></div>
                         </div>
                         <button class="copy" data-target="url-base64">Копировать</button>
@@ -259,6 +296,14 @@
                         <button type="button" id="sort-country" aria-pressed="true">По стране</button>
                         <button type="button" id="sort-speed" aria-pressed="false">По скорости</button>
                     </div>
+                    <!-- Настройка подписки, а не страницы: меняет то, что
+                         вернёт Happ, поэтому хранится на сервере — иначе
+                         настройка жила бы только в этом браузере. -->
+                    <button type="button" id="groups-toggle" class="toggle"
+                            aria-pressed="false"
+                            title="Группировать серверы по странам в подписке">
+                        Группы по странам: выкл
+                    </button>
                 </div>
                 <input type="search" id="search" placeholder="Найти по названию или стране" aria-label="Поиск сервера" style="margin-bottom:12px">
                 <div class="chips" id="chips"></div>
@@ -582,6 +627,7 @@
             }
 
             renderFacts(data);
+            applyPageFlags(data);
             // Порядок из подписки уже разложен по странам — пересортировываем
             // только когда явно попросили «по скорости».
             SERVERS = (data.servers || []).slice();
@@ -635,7 +681,7 @@
             document.getElementById('url-happ').textContent = subUrl('happ');
             document.getElementById('url-auto').textContent = subUrl('');
             document.getElementById('url-clash').textContent = subUrl('clash');
-            document.getElementById('url-base64').textContent = subUrl('base64');
+            document.getElementById('url-base64').textContent = subUrl('links');
             load();
         }
 
@@ -689,6 +735,62 @@
         document.getElementById('sort-country').addEventListener('click', () => setSortMode('country'));
         document.getElementById('sort-speed').addEventListener('click', () => setSortMode('speed'));
 
+        // ---------- переключатель групп по странам ----------
+        //
+        // Настройка не в браузере: она меняет то, что вернёт Happ, и должна
+        // быть общей. Поэтому спрашиваем и отправляем её на сервер, пароль
+        // уходит тем же, что и при входе.
+        const groupsBtn = document.getElementById('groups-toggle');
+
+        function paintGroups(on, note) {
+            groupsBtn.setAttribute('aria-pressed', String(!!on));
+            groupsBtn.textContent = 'Группы по странам: ' + (on ? 'вкл' : 'выкл')
+                + (note ? ' · ' + note : '');
+        }
+
+        async function loadGroups() {
+            try {
+                const r = await fetch('/gemini?setting=groups', { cache: 'no-store' });
+                const d = await r.json();
+                paintGroups(d.on);
+            } catch (e) {
+                groupsBtn.textContent = 'Группы: не проверить';
+            }
+        }
+
+        // Флаг из meta: hide_settings = 1 прячет переключатель. Сама настройка при
+        // этом продолжает работать через API — её можно включать и выключать
+        // вручную или из другого места.
+        function applyPageFlags(data) {
+            const hide = Number((data && data.page && data.page.hide_settings) || 0) === 1;
+            groupsBtn.hidden = hide;
+        }
+
+        groupsBtn.addEventListener('click', async () => {
+            const on = groupsBtn.getAttribute('aria-pressed') !== 'true';
+            groupsBtn.disabled = true;
+            paintGroups(on, 'сохраняю');
+            try {
+                const r = await fetch('/gemini?setting=groups&on=' + (on ? '1' : '0'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: KEY }),
+                });
+                const d = await r.json();
+                if (r.ok && d.ok) {
+                    paintGroups(d.on, 'в Happ при следующем обновлении');
+                } else if (d.error === 'wrong-password') {
+                    paintGroups(!on, 'пароль не принят');
+                } else {
+                    paintGroups(!on, 'не сохранилось');
+                }
+            } catch (e) {
+                paintGroups(!on, 'нет связи');
+            }
+            groupsBtn.disabled = false;
+        });
+        loadGroups();
+
         document.getElementById('logout').addEventListener('click', () => {
             // Чистим ключ на устройстве и возвращаем форму — так можно
             // сменить пароль, если он поменялся в настройках Pages.
@@ -700,6 +802,153 @@
             input.value = '';
             input.focus();
         });
+
+        // ---------- сетка с искажением под курсором ----------
+        //
+        // Линии сетки расходятся в стороны от указателя и плавно
+        // возвращаются на место. Анимация не крутится постоянно: как только
+        // сетка успокоилась, кадры прекращаются и полотно прячется. Иначе
+        // страница с длинным списком постоянно перерисовывалась бы впустую.
+        (() => {
+            const canvas = document.getElementById('grid-canvas');
+            if (!canvas) return;
+            // Уважаем системную настройку: без анимации эффект не нужен.
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+
+            const CELL = 52;          // шаг сетки, px
+            const RADIUS = 320;       // радиус линзы, px
+            const ZOOM = 0.62;        // насколько клетка растёт у курсора
+            const STEP = 11;          // шаг отрисовки вдоль линии, px
+            const SETTLE = 0.16;      // скорость возврата
+            const IDLE_FRAMES = 24;   // кадров тишины до остановки
+
+            let w = 0, h = 0, dpr = 1;
+            const pointer = { x: -9999, y: -9999 };
+            const eased = { x: -9999, y: -9999 };
+            let idle = 0;
+            let raf = 0;
+
+            function resize() {
+                // Плотность ограничиваем полутора: линии тонкие, разницы не видно, а
+            // растеризация заметно дешевле — эффект рисуется на весь экран.
+            dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+                w = window.innerWidth;
+                h = window.innerHeight;
+                canvas.width = Math.floor(w * dpr);
+                canvas.height = Math.floor(h * dpr);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+
+            // Увеличение под курсором: чем ближе точка сетки к указателю, тем дальше
+            // она отодвигается от него. Из-за растяжения клетки рядом с
+            // курсором выглядят крупнее — как под линзой, а дальше сетка
+            // остаётся ровной.
+            function warp(x, y) {
+                const dx = x - eased.x;
+                const dy = y - eased.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist >= RADIUS || dist === 0) return [x, y];
+                const f = 1 - dist / RADIUS;
+                const scale = 1 + f * f * ZOOM;
+                return [eased.x + dx * scale, eased.y + dy * scale];
+            }
+
+            // Линия рисуется сплайном по промежуточным точкам: при шаге
+            // в 9 px ломаная выглядела бы ступенчатой.
+            function strokeRow(pts) {
+                if (pts.length < 2) return;
+                ctx.moveTo(pts[0][0], pts[0][1]);
+                for (let i = 1; i < pts.length - 1; i++) {
+                    const mx = (pts[i][0] + pts[i + 1][0]) / 2;
+                    const my = (pts[i][1] + pts[i + 1][1]) / 2;
+                    ctx.quadraticCurveTo(pts[i][0], pts[i][1], mx, my);
+                }
+                const last = pts[pts.length - 1];
+                ctx.lineTo(last[0], last[1]);
+            }
+
+            function draw() {
+                ctx.clearRect(0, 0, w, h);
+                ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+
+                // Сетка на весь экран: клетки у курсора крупнеют, остальные
+                // остаются обычного размера.
+                const row = [];
+                for (let x = 0; x <= w; x += CELL) {
+                    row.length = 0;
+                    for (let y = 0; y <= h; y += STEP) row.push(warp(x, y));
+                    strokeRow(row);
+                }
+                const col = [];
+                for (let y = 0; y <= h; y += CELL) {
+                    col.length = 0;
+                    for (let x = 0; x <= w; x += STEP) col.push(warp(x, y));
+                    strokeRow(col);
+                }
+                ctx.stroke();
+            }
+
+            function step() {
+                eased.x += (pointer.x - eased.x) * SETTLE;
+                eased.y += (pointer.y - eased.y) * SETTLE;
+                draw();
+
+                const moved = Math.hypot(pointer.x - eased.x, pointer.y - eased.y);
+                if (moved < 0.6 && ++idle > IDLE_FRAMES) {
+                    // Успокоились: рисуем последний кадр и останавливаемся.
+                    canvas.hidden = true;
+                    raf = 0;
+                    return;
+                }
+                idle = moved < 0.6 ? idle : 0;
+                raf = requestAnimationFrame(step);
+            }
+
+            function wake() {
+                if (!raf) {
+                    canvas.hidden = false;
+                    raf = requestAnimationFrame(step);
+                }
+                idle = 0;
+            }
+
+            window.addEventListener('resize', () => {
+                resize();
+                if (!raf) { draw(); }
+            }, { passive: true });
+
+            window.addEventListener('pointermove', (e) => {
+                pointer.x = e.clientX;
+                pointer.y = e.clientY;
+                // Первый жест: рисуем сетку, до этого она скрыта.
+                if (eased.x < -1000) { eased.x = e.clientX; eased.y = e.clientY; }
+                wake();
+            }, { passive: true });
+
+            // На телефоне курсора нет — сетка появится от касания.
+            window.addEventListener('pointerdown', (e) => {
+                if (e.pointerType !== 'mouse') {
+                    pointer.x = e.clientX;
+                    pointer.y = e.clientY;
+                    if (eased.x < -1000) { eased.x = e.clientX; eased.y = e.clientY; }
+                    wake();
+                }
+            }, { passive: true });
+
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden && raf) {
+                    cancelAnimationFrame(raf);
+                    raf = 0;
+                }
+            });
+
+            resize();
+        })();
 
         (async () => {
             // Ссылки рабочие только с паролем: запоминание IP держится на

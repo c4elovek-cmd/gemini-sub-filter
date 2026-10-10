@@ -326,6 +326,82 @@ def _compose_name(head: str, flag: str, country: str, index: int | None) -> str:
     return f"{head} | {tail}" if head and tail else (tail or head)
 
 
+def country_groups(countries, min_servers: int = 5,
+                   max_groups: int = 10) -> list[dict]:
+    """Группы по странам для верхних записей в Happ.
+
+    На вход — коды стран работающих серверов (можно пустые).
+
+    Отдельная группа нужна стране, у которой серверов достаточно, чтобы
+    переключение между ними было осмысленным: один-два сервера в «группе»
+    не дают ничего, кроме лишней строки в списке. Поэтому порог по числу
+    серверов, а не список стран: набор стран меняется от прогона к прогону,
+    а правило остаётся тем же.
+
+    Порядок групп — по количеству серверов, от большего к меньшему.
+    """
+    counts: Counter[str] = Counter()
+    for code in countries:
+        cc = (code or "").upper()
+        if cc:
+            counts[cc] += 1
+
+    groups = []
+    for cc, count in counts.most_common(max_groups):
+        if count < min_servers:
+            break
+        groups.append({
+            "cc": cc,
+            "name": COUNTRY_NAMES_RU.get(cc, cc),
+            "flag": flag_emoji(cc),
+            "count": count,
+        })
+    return groups
+
+
+def format_bytes_ru(value: int) -> str:
+    """Число байт по-русски: «56 ГБ», «1,4 ТБ»."""
+    units = ["Б", "КБ", "МБ", "ГБ", "ТБ"]
+    v = float(value or 0)
+    i = 0
+    while v >= 1024 and i < len(units) - 1:
+        v /= 1024
+        i += 1
+    digits = 0 if v >= 10 or i >= 3 else 1
+    return f"{v:.{digits}f}".replace(".", ",") + " " + units[i]
+
+
+def subscription_badge(profile: dict) -> str:
+    """Состояние подписки одной строкой: «📦 56 ГБ · до 14.08.2036».
+
+    Нужна для описания gist-зеркала: карточку подписки в Happ собирают
+    заголовки ответа, а GitHub отдаёт статический файл без единого своего
+    заголовка. В зеркале состояние подписки видно только здесь и в названии
+    верхнего пункта списка, который пишет функция на сайте.
+    """
+    parts: list[str] = []
+    used = int(profile.get("traffic_used") or 0)
+    limit = int(profile.get("traffic_limit") or 0)
+    if used and limit:
+        parts.append(f"📦 {format_bytes_ru(used)} из {format_bytes_ru(limit)}")
+    elif used:
+        parts.append(f"📦 {format_bytes_ru(used)} · без лимита")
+    elif limit:
+        parts.append(f"📦 0 из {format_bytes_ru(limit)}")
+
+    expire = profile.get("expire_at")
+    if expire:
+        try:
+            when = datetime.fromisoformat(str(expire).replace("Z", "+00:00"))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            parts.append(f"📅 до {when:%d.%m.%Y}")
+        except (ValueError, TypeError):
+            pass
+
+    return " · ".join(parts)
+
+
 def _relink(server: Server) -> str:
     """Переписывает имя прямо в ссылке — иначе клиенты увидят старое."""
     parts = urllib.parse.urlsplit(server.link)
@@ -333,6 +409,113 @@ def _relink(server: Server) -> str:
         (parts.scheme, parts.netloc, parts.path, parts.query,
          urllib.parse.quote(server.name, safe=""))
     )
+
+
+def flag_emoji(cc: str) -> str:
+    """Флаг-эмодзи по коду страны: NL -> 🇳🇱."""
+    cc = (cc or "").upper()
+    if len(cc) != 2 or not cc.isalpha():
+        return ""
+    base = 0x1F1E6 - ord("A")
+    return chr(base + ord(cc[0])) + chr(base + ord(cc[1]))
+
+
+# Русские названия стран. Нужны, чтобы подписку можно было назвать по факту
+# выхода: страна в подписи провайдера ему же не всегда соответствует.
+COUNTRY_NAMES_RU = {
+    "AD": "Андорра", "AE": "ОАЭ", "AG": "Антигуа и Барбуда", "AI": "Ангилья",
+    "AL": "Албания", "AM": "Армения", "AO": "Ангола", "AR": "Аргентина",
+    "AT": "Австрия", "AU": "Австралия", "AW": "Аруба", "AX": "Аландские острова",
+    "AZ": "Азербайджан", "BA": "Босния и Герцеговина", "BB": "Барбадос",
+    "BD": "Бангладеш", "BE": "Бельгия", "BF": "Буркина-Фасо", "BG": "Болгария",
+    "BH": "Бахрейн", "BI": "Бурунди", "BJ": "Бенин", "BM": "Бермуды",
+    "BN": "Бруней", "BO": "Боливия", "BR": "Бразилия", "BS": "Багамы",
+    "BT": "Бутан", "BW": "Ботсвана", "BY": "Беларусь", "BZ": "Белиз",
+    "CA": "Канада", "CD": "ДР Конго", "CF": "ЦАР", "CG": "Конго",
+    "CH": "Швейцария", "CI": "Кот-д'Ивуар", "CL": "Чили", "CM": "Камерун",
+    "CN": "Китай", "CO": "Колумбия", "CR": "Коста-Рика", "CU": "Куба",
+    "CV": "Кабо-Верде", "CW": "Кюрасао", "CY": "Кипр", "CZ": "Чехия",
+    "DE": "Германия", "DJ": "Джибути", "DM": "Доминика", "DO": "Доминикана",
+    "DZ": "Алжир", "EC": "Эквадор", "EE": "Эстония", "EG": "Египет",
+    "ER": "Эритрея", "ES": "Испания", "ET": "Эфиопия", "FI": "Финляндия",
+    "FJ": "Фиджи", "FM": "Микронезия", "FR": "Франция", "GA": "Габон",
+    "GB": "Великобритания", "GD": "Гренада", "GE": "Грузия", "GH": "Гана",
+    "GI": "Гибралтар", "GL": "Гренландия", "GM": "Гамбия", "GN": "Гвинея",
+    "GQ": "Экваториальная Гвинея", "GR": "Греция", "GT": "Гватемала",
+    "GU": "Гуам", "GW": "Гвинея-Бисау", "GY": "Гайана", "HK": "Гонконг",
+    "HN": "Гондурас", "HR": "Хорватия", "HT": "Гаити", "HU": "Венгрия",
+    "ID": "Индонезия", "IE": "Ирландия", "IL": "Израиль", "IN": "Индия",
+    "IQ": "Ирак", "IR": "Иран", "IS": "Исландия", "IT": "Италия",
+    "JM": "Ямайка", "JO": "Иордания", "JP": "Япония", "KE": "Кения",
+    "KG": "Киргизия", "KH": "Камбоджа", "KI": "Кирибати", "KM": "Коморы",
+    "KR": "Южная Корея", "KW": "Кувейт", "KZ": "Казахстан", "LA": "Лаос",
+    "LB": "Ливан", "LK": "Шри-Ланка", "LR": "Либерия", "LS": "Лесото",
+    "LT": "Литва", "LU": "Люксембург", "LV": "Латвия", "LY": "Ливия",
+    "MA": "Марокко", "MC": "Монако", "MD": "Молдова", "ME": "Черногория",
+    "MG": "Мадагаскар", "MK": "Северная Македония", "ML": "Мали",
+    "MM": "Мьянма", "MN": "Монголия", "MO": "Макао", "MR": "Мавритания",
+    "MT": "Мальта", "MU": "Маврикий", "MV": "Мальдивы", "MW": "Малави",
+    "MX": "Мексика", "MY": "Малайзия", "MZ": "Мозамбик", "NA": "Намибия",
+    "NE": "Нигер", "NG": "Нигерия", "NI": "Никарагуа", "NL": "Нидерланды",
+    "NO": "Норвегия", "NP": "Непал", "NR": "Науру", "NZ": "Новая Зеландия",
+    "OM": "Оман", "PA": "Панама", "PE": "Перу", "PG": "Папуа — Новая Гвинея",
+    "PH": "Филиппины", "PK": "Пакистан", "PL": "Польша", "PR": "Пуэрто-Рико",
+    "PS": "Палестина", "PT": "Португалия", "PW": "Палау", "PY": "Парагвай",
+    "QA": "Катар", "RE": "Реюньон", "RO": "Румыния", "RS": "Сербия",
+    "RU": "Россия", "RW": "Руанда", "SA": "Саудовская Аравия",
+    "SB": "Соломоновы Острова", "SC": "Сейшелы", "SD": "Судан", "SE": "Швеция",
+    "SG": "Сингапур", "SI": "Словения", "SK": "Словакия", "SL": "Сьерра-Леоне",
+    "SM": "Сан-Марино", "SN": "Сенегал", "SO": "Сомали", "SR": "Сурин",
+    "SS": "Южный Судан", "ST": "Сан-Томе и Принсипи", "SV": "Сальвадор",
+    "SY": "Сирия", "SZ": "Эсватини", "TD": "Чад", "TG": "Того", "TH": "Таиланд",
+    "TJ": "Таджикистан", "TL": "Восточный Тимор", "TM": "Туркменистан",
+    "TN": "Тунис", "TO": "Тонга", "TR": "Турция", "TT": "Тринидад и Тобаго",
+    "TV": "Тувалу", "TW": "Тайвань", "TZ": "Танзания", "UA": "Украина",
+    "UG": "Уганда", "US": "США", "UY": "Уругвай", "UZ": "Узбекистан",
+    "VA": "Ватикан", "VC": "Сент-Винсент и Гренадины", "VE": "Венесуэла",
+    "VN": "Вьетнам", "VU": "Вануату", "WS": "Самоа", "YE": "Йемен",
+    "ZA": "ЮАР", "ZM": "Замбия", "ZW": "Зимбабве",
+}
+
+
+def apply_measured_country(pairs: list[tuple[Server, str]]) -> None:
+    """Переименовывает серверы по стране, измеренной при проверке.
+
+    На входе — пары (сервер, код страны из замера). Серверы переименовываются
+    на месте, вместе со своей ссылкой.
+
+    Провайдеры подписывают узлы как хотят: адрес, помеченный «Россия», спокойно
+    выходит в Нидерландах, и наоборот. Пользователь видит в клиенте «Россия» и
+    решает, что Gemini там не откроется, — хотя сервер рабочий. Или наоборот:
+    сервер с российским выходом пролезает в подписку под чужим именем.
+
+    Поэтому страна в подписи берётся из замера, а не из подписи провайдера:
+    именно она решает, откроется Gemini или нет. Если гео определить не удалось,
+    оставляем как было — выдумывать страну нельзя.
+    """
+    for server, cc in pairs:
+        cc = (cc or "").upper()
+        if not cc:
+            continue
+        head, _, _ = clean_name(server.name)
+        server.name = _compose_name(
+            head, flag_emoji(cc), COUNTRY_NAMES_RU.get(cc, cc), None)
+
+    # Страны поменялись — пересобираем подписи: нумерация внутри пары
+    # (провайдер, страна) должна стать сплошной, иначе в Happ имена слипаются.
+    parsed: list[tuple[Server, str, str, str, int]] = []
+    for position, (server, _) in enumerate(pairs):
+        head, flag, country = clean_name(server.name)
+        parsed.append((server, head, flag, country, position))
+
+    totals = Counter((item[1], item[3]) for item in parsed)
+    counters: Counter[tuple[str, str]] = Counter()
+    for server, head, flag, country, _ in parsed:
+        key = (head, country)
+        counters[key] += 1
+        server.name = _compose_name(
+            head, flag, country, counters[key] if totals[key] > 1 else None)
+        server.link = _relink(server)
 
 
 def normalize_names(servers: list[Server]) -> list[Server]:
@@ -680,6 +863,43 @@ class Result:
     status: int = 0
     country: str = ""
     exit_ip: str = ""
+    ping: int = 0
+
+
+def tcp_ping(host: str, port: int, timeout: float = 5.0) -> int:
+    """Задержка до установления TCP-соединения, мс. -1 — сервер не ответил.
+
+    Это именно пинг, а не время ответа Gemini: страница весит десятки
+    килобайт, и её загрузка измеряет ещё и скорость канала. Замер идёт
+    напрямую до адреса сервера, мимо туннеля.
+
+    Имя разрешается ДО запуска секундомера. Иначе в первый заход попадает
+    холодный DNS — он один даёт до трёх секунд, и нормальный сервер
+    выглядит самым медленным.
+
+    Ноль — не ошибка, а честное измерение: соединение может установиться
+    быстрее миллисекунды, и int() срежет его в 0. Поэтому обрыв отличаем
+    отдельным знаком -1, а не нулём.
+    """
+    try:
+        addrinfo = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError:
+        return -1
+    if not addrinfo:
+        return -1
+
+    # Замеряем только соединение: DNS уже разрешён, таймер запускаем после.
+    family, socktype, proto, _, sockaddr = addrinfo[0]
+    sock = socket.socket(family, socktype, proto)
+    sock.settimeout(timeout)
+    try:
+        start = time.monotonic()
+        sock.connect(sockaddr)
+        return max(1, int((time.monotonic() - start) * 1000))
+    except OSError:
+        return -1
+    finally:
+        sock.close()
 
 
 def _probe_gemini(socks_port: int, check: dict, body_path: Path, timeout: int) -> tuple[int, int, str]:
@@ -785,7 +1005,24 @@ def check_server(server: Server, cfg: dict, xray: Path, allowed: set[str]) -> Re
                     status=status,
                 )
 
-            # --- шаг 2: страна выхода, но только для тех, кто уже ответил
+            # --- шаг 2: пинг. Меряем только у тех, кто прошёл Gemini: замер
+            # стоит соединения, а брать его у заведомо отсеянных незачем.
+            # Шаг идёт ДО определения страны, иначе серверы с неопределённой
+            # страной вышли бы отсюда раньше и остались без проверки пинга.
+            max_ping = int(check.get("max_ping_ms") or 0)
+            ping = tcp_ping(server.host, server.port, timeout=5) if max_ping else 0
+            if max_ping and ping < 0:
+                return Result(
+                    server, False, f"пинг не измерился (порог {max_ping} мс)", elapsed,
+                    status=status, ping=-1,
+                )
+            if max_ping and ping > max_ping:
+                return Result(
+                    server, False, f"пинг {ping} мс — медленнее {max_ping}", elapsed,
+                    status=status, ping=ping,
+                )
+
+            # --- шаг 3: страна выхода
             country, exit_ip = probe_country(socks_port, timeout, tmp)
 
             if not country:
@@ -793,19 +1030,19 @@ def check_server(server: Server, cfg: dict, xray: Path, allowed: set[str]) -> Re
                 # проверен, но выбрасывать рабочий сервер из-за лимита геосервиса
                 # хуже, чем оставить одну непроверенную страну.
                 return Result(
-                    server, True, "страна не определена, но Gemini ответил", elapsed,
-                    status=status, country="", exit_ip=exit_ip,
+                    server, True, f"страна не определена, но Gemini ответил · {ping} мс",
+                    elapsed, status=status, country="", exit_ip=exit_ip, ping=ping,
                 )
 
             if allowed and country not in allowed:
                 return Result(
                     server, False, f"страна {country} — Gemini недоступен", elapsed,
-                    status=status, country=country, exit_ip=exit_ip,
+                    status=status, country=country, exit_ip=exit_ip, ping=ping,
                 )
 
             return Result(
-                server, True, f"{country} · HTTP {status}", elapsed,
-                status=status, country=country, exit_ip=exit_ip,
+                server, True, f"{country} · HTTP {status} · {ping} мс", elapsed,
+                status=status, country=country, exit_ip=exit_ip, ping=ping,
             )
         finally:
             if proc.poll() is None:
@@ -889,6 +1126,50 @@ def server_entry(server: Server, result: Result | None = None) -> dict:
     return entry
 
 
+def _wait_until_published(public_url: str, password: str, links: list[str],
+                          tries: int = 8, pause: int = 4) -> bool:
+    """Ждёт, пока сайт начнёт отдавать только что записанную подписку.
+
+    KV в Cloudflare обновляется не мгновенно: сразу после записи функция
+    ещё какое-то время отдаёт прежние данные. Без этой паузы зеркало
+    забирало старую подписку и оставалось на шаг позади — при этом запись
+    в gist проходила успешно, и подмена была незаметна.
+
+    Ориентируемся на имя первого сервера: оно меняется при каждой публикации.
+    """
+    if not links:
+        return True
+    # Сверяем в том же виде, в каком сайт их отдаёт: фрагмент ссылки
+    # лежит процентно закодированным, и декодированного имени там нет.
+    marker = links[0].split("#", 1)[-1] if "#" in links[0] else ""
+    if not marker:
+        return True
+
+    sep = "&" if "?" in public_url else "?"
+    target = f"{public_url.rstrip('/')}/{password}{sep}format=links&gz=1"
+    for attempt in range(1, tries + 1):
+        try:
+            req = urllib.request.Request(target, headers={
+                "User-Agent": "gemini-sub-filter/1.0 (mirror)",
+                "Accept-Encoding": "gzip",
+            })
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                body = resp.read()
+            for _ in range(3):
+                if body[:2] != b"\x1f\x8b":
+                    break
+                body = gzip.decompress(body)
+            if marker in body.decode("utf-8", "replace"):
+                if attempt > 1:
+                    log(f"  сайт увидел новую подписку с {attempt}-й попытки")
+                return True
+        except Exception as exc:  # noqa: BLE001
+            log(f"  проверка публикации не вышла: {exc}")
+        time.sleep(pause)
+    log("  сайт так и не увидел новую подписку — зеркало может отстать")
+    return False
+
+
 def _fetch_gzipped(url: str, password: str, fmt: str, timeout: int = 90) -> str:
     """Забирает выдачу сайта в сжатом виде и распаковывает.
 
@@ -919,7 +1200,7 @@ def _fetch_gzipped(url: str, password: str, fmt: str, timeout: int = 90) -> str:
     return data.decode("utf-8")
 
 
-def publish_mirror(cfg: dict) -> dict[str, str]:
+def publish_mirror(cfg: dict, links: list[str] | None = None) -> dict[str, str]:
     """Кладёт выдачу в статическое зеркало и возвращает ссылки на форматы.
 
     Зеркало нужно там, где Cloudflare недоступен: имя фильтруется в некоторых
@@ -956,8 +1237,23 @@ def publish_mirror(cfg: dict) -> dict[str, str]:
         return {}
 
     api = f"https://api.github.com/gists/{gist_id}"
-    payload: dict[str, dict] = {}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "User-Agent": "gemini-sub-filter",
+    }
+
+    def gist_call(method: str, payload: dict | None = None) -> dict:
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(api, data=data, method=method, headers=headers)
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
     urls: dict[str, str] = {}
+    # Форматы берём с сайта, но только убедившись, что он уже видит новую
+    # подписку: KV обновляется не мгновенно, и иначе зеркало отстаёт.
+    _wait_until_published(public_url, password, links or [])
 
     for fmt, filename in files.items():
         try:
@@ -965,34 +1261,160 @@ def publish_mirror(cfg: dict) -> dict[str, str]:
         except Exception as exc:  # noqa: BLE001
             log(f"  ЗЕРКАЛО '{fmt}': не забрал выдачу — {exc}")
             continue
-        payload[filename] = {"content": body}
-        urls[fmt] = f"{template}{filename}"
-        log(f"  ЗЕРКАЛО '{fmt}': {filename} ({len(body)} Б)")
 
-    if not payload:
-        log("  ЗЕРКАЛО ПРОПУЩЕНО — ни один формат не забрался")
-        return {}
+        # Файлы шлём по одному и обязательно перечитываем: GitHub отвечает 200
+        # даже когда содержимое не применилось. Пакетная отправка трёх файлов
+        # молча оставалась без изменений — зеркало цепенело на старой версии,
+        # и заметить это можно было только сверкой. Здесь сверка встроена.
+        written = False
+        for attempt in range(1, 4):
+            try:
+                gist_call("PATCH", {"files": {filename: {"content": body}}})
+                got = gist_call("GET")["files"][filename].get("content") or ""
+            except Exception as exc:  # noqa: BLE001
+                log(f"  ЗЕРКАЛО '{fmt}': попытка {attempt} не вышла — {exc}")
+                time.sleep(3 * attempt)
+                continue
+            if got == body:
+                written = True
+                break
+            log(f"  ЗЕРКАЛО '{fmt}': попытка {attempt} не применилась "
+                f"(пришло {len(got)} из {len(body)} символов)")
+            time.sleep(3 * attempt)
 
-    # Отправка крупная (Happ-файл под четверть мегабайта), а канал бывает
-    # рваный — DNS отваливается на разговоре. Поэтому несколько попыток.
-    data = json.dumps(payload).encode("utf-8")
-    for attempt in range(3):
-        req = urllib.request.Request(api, data=data, method="PATCH")
-        req.add_header("Authorization", f"Bearer {token}")
-        req.add_header("Accept", "application/vnd.github+json")
-        req.add_header("Content-Type", "application/json")
-        req.add_header("User-Agent", "gemini-sub-filter")
+        if written:
+            urls[fmt] = f"{template}{filename}"
+            log(f"  ЗЕРКАЛО '{fmt}': {filename} — обновлён и сверен ({len(body)} Б)")
+        else:
+            log(f"  ЗЕРКАЛО '{fmt}': НЕ обновился, осталось прошлое содержимое")
+
+    if not urls:
+        log("  ЗЕРКАЛО: не обновилось ни одного формата")
+    return urls
+
+
+def publish_yandex_objects(cfg: dict, meta: dict) -> str:
+    """Кладёт выдачу в бакет Yandex Cloud — данные для зеркала-функции.
+
+    Отличие от gist-зеркала принципиальное. Там лежит статический файл, и
+    подписка приходит без единого заголовка: карточка в клиенте собирается
+    именно из заголовков ответа, поэтому на gist её нет. Здесь данные лежат
+    в Object Storage, а отдаёт их функция, которая заголовки добавляет, —
+    карточка выходит целиком, с трафиком, сроком и описанием.
+
+    Саму выдачу забираем с основного адреса: её собирает одна и та же логика,
+    и второе место, где она могла бы с ним разойтись, нам не нужно.
+
+    Каждый объект после записи перечитывается. Object Storage не сообщает об
+    ошибке, если ключ перепутан, — а подписка молча осталась бы старой, и
+    заметить это можно было бы только по жалобе.
+    """
+    yc = ((cfg.get("mirror") or {}).get("yandex") or {})
+    if not yc.get("enabled", True) or not yc.get("bucket"):
+        return ""
+
+    key_path = (yc.get("service_account_key") or "").strip()
+    if not key_path or not os.path.exists(key_path):
+        log("  YANDEX ПРОПУЩЕНО — не задан или не найден service_account_key")
+        return ""
+
+    try:
+        import boto3
+
+        key = json.loads(Path(key_path).read_text(encoding="utf-8"))
+        s3 = boto3.client(
+            "s3",
+            endpoint_url="https://storage.yandexcloud.net",
+            region_name="ru-central1",
+            aws_access_key_id=key["access_key_id"],
+            aws_secret_access_key=key["secret_access_key"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"  YANDEX ПРОПУЩЕНО — не удалось подключиться к хранилищу: {exc}")
+        return ""
+
+    bucket = yc["bucket"]
+    public_url = cfg["publish"]["public_url"]
+    password = os.environ.get("WG_PASSWORD", "").strip() or (cfg["mirror"].get("password", ""))
+
+    payloads: list[tuple[str, str]] = [
+        ("links.txt", _fetch_gzipped(public_url, password, "links")),
+        ("base64.txt", _fetch_gzipped(public_url, password, "base64")),
+        ("clash.yaml", _fetch_gzipped(public_url, password, "clash")),
+        ("happ.json", _fetch_gzipped(public_url, password, "happ")),
+        # meta кладём из памяти, а не забираем с сайта: так в бакете сразу
+        # правильные трафик, срок и время обновления для карточки.
+        ("meta.json", json.dumps(meta, ensure_ascii=False, indent=2)),
+    ]
+
+    good = 0
+    for key_name, body in payloads:
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                if resp.status == 200:
-                    log(f"  ЗЕРКАЛО обновлено: ок ({len(payload)} файла)")
-                    return urls
+            s3.put_object(Bucket=bucket, Key=key_name, Body=body.encode("utf-8"),
+                          ContentType="text/plain; charset=utf-8")
+            got = s3.get_object(Bucket=bucket, Key=key_name)["Body"].read().decode("utf-8")
         except Exception as exc:  # noqa: BLE001
-            log(f"  ЗЕРКАЛО: попытка {attempt + 1} не вышла — {exc}")
-            time.sleep(3 * (attempt + 1))
+            log(f"  YANDEX '{key_name}': не записался — {exc}")
+            continue
+        if got == body:
+            good += 1
+        else:
+            log(f"  YANDEX '{key_name}': записано {len(body)} Б, "
+                f"прочитано {len(got)} Б — расхождение")
 
-    log("  ЗЕРКАЛО: не обновилось, зеркало осталось с прошлым содержимым")
-    return {}
+    log(f"  YANDEX: обновлено {good} из {len(payloads)} объектов в «{bucket}»")
+    return f"https://{yc.get('function', 'gemini-sub')}.functions.yandexcloud.net/{yc.get('token', '')}"
+
+
+def _describe_mirror(cfg: dict) -> None:
+    """Ставит описание gist: состояние подписки прямо на странице GitHub.
+
+    Отдельная деталь: карточку подписки в Happ собирают заголовки ответа, а
+    GitHub отдаёт статический файл и своих заголовков не добавляет. Поэтому в
+    зеркале состояние подписки видно только на странице gist и в названии
+    верхнего пункта списка — оба места обновляются здесь.
+    """
+    mirror = cfg.get("mirror") or {}
+    if not mirror.get("enabled") or not mirror.get("gist_id"):
+        return
+
+    try:
+        profile = fetch_profile(cfg)
+    except Exception:  # noqa: BLE001
+        return
+
+    badge = subscription_badge(profile)
+    stamp = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M")
+    description = (
+        "⚡ Подписка, отфильтрованная по реальной доступности Gemini."
+        + (f" {badge}" if badge else "")
+        + f"\n🔄 Обновлено {stamp} (МСК)"
+        + "\n\nЗеркало статическое: имя файла — случайный токен, это и есть"
+          " весь уровень защиты. Основной адрес: https://c4elovek.online/workgemini"
+    )
+
+    token = subprocess.run(
+        ["gh", "auth", "token"], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", creationflags=NO_WINDOW,
+    ).stdout.strip()
+    if not token:
+        return
+
+    req = urllib.request.Request(
+        f"https://api.github.com/gists/{mirror['gist_id']}",
+        data=json.dumps({"description": description}).encode("utf-8"),
+        method="PATCH",
+    )
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "gemini-sub-filter")
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            if resp.status == 200:
+                log("  Описание gist обновлено")
+    except Exception as exc:  # noqa: BLE001
+        log(f"  описание gist не обновилось: {exc}")
 
 
 def publish(cfg: dict, links: list[str], meta: dict) -> None:
@@ -1043,7 +1465,7 @@ def publish(cfg: dict, links: list[str], meta: dict) -> None:
     # Зеркало обновляем до meta, чтобы в meta сразу лежали свежие ссылки,
     # а страница показала их следующей загрузкой.
     log("Обновляю зеркало...")
-    mirror_urls = publish_mirror(cfg)
+    mirror_urls = publish_mirror(cfg, links)
     if mirror_urls:
         meta_full["mirror"] = mirror_urls
         meta_full["mirror_note"] = (
@@ -1053,6 +1475,15 @@ def publish(cfg: dict, links: list[str], meta: dict) -> None:
 
     ok_meta = put("meta", json.dumps(meta_full, ensure_ascii=False, indent=2).encode("utf-8"))
     log(f"  KV 'meta': {'ок' if ok_meta else 'провал'}")
+
+    # Данные для зеркала в Yandex. Основной адрес к этому моменту уже отдаёт
+    # новую выдачу — publish_mirror дождался этого сам.
+    yandex_url = publish_yandex_objects(cfg, meta_full)
+    if yandex_url:
+        meta_full.setdefault("mirror_yandex", yandex_url)
+        put("meta", json.dumps(meta_full, ensure_ascii=False, indent=2).encode("utf-8"))
+
+    _describe_mirror(cfg)
 
     if ok_sub and ok_meta:
         log(f"  Готово. Адрес: {pub['public_url']}")
@@ -1102,11 +1533,24 @@ def republish_from_report(cfg: dict) -> int:
     # Порядок не трогаем: parse_servers уже разложил серверы по странам,
     # а good_addrs — множество, и обход по нему дал бы произвольный порядок.
     by_addr = {x.get("addr"): x for x in report.get("servers", [])}
+
+    # Подписи ставим по стране из отчёта — она измерена, а не взята из
+    # названия провайдера. Без этого в публикацию попадают узлы, названные
+    # «Россия», хотя выходят в Нидерландах.
+    apply_measured_country(
+        [(s, by_addr.get(s.addr, {}).get("country", "")) for s in chosen])
+    chosen.sort(key=country_sort_key)
+
+    profile = fetch_profile(cfg)
+
     meta = {
         "updated_at": report.get("generated_at"),
         "checked": report.get("total"),
         "working": len(chosen),
-        "subscription": fetch_profile(cfg),
+        "subscription": profile,
+        "page": cfg.get("page", {}),
+        "country_groups": country_groups(
+            by_addr.get(s.addr, {}).get("country", "") for s in chosen),
         "servers": [
             {
                 **server_entry(s),
@@ -1165,9 +1609,16 @@ def main() -> int:
         return republish_from_report(cfg)
 
     # --- TUN: без этого проверка врёт
-    if not cfg["check"].get("skip_tun_check") and not args.skip_tun:
-        tuns = active_tun_adapters()
-        if tuns:
+    tuns = active_tun_adapters()
+    if tuns:
+        if cfg["check"].get("skip_tun_check") or args.skip_tun:
+            # Пропускаем осознанно: в Happ настроено исключение для этого
+            # приложения, и трафик скрипта в туннель не заворачивается.
+            # Раньше здесь был отказ, и при включённом VPN подписка не
+            # обновлялась вовсе — задача молча упиралась в код 3.
+            log(f"ВНИМАНИЕ: поднят TUN-адаптер {', '.join(tuns)} — проверяем всё равно.")
+            log("Результат верен, только если этот скрипт исключён из VPN в Happ.")
+        else:
             log(f"ВНИМАНИЕ: поднят TUN-адаптер {', '.join(tuns)}.")
             log("Весь трафик уже идёт через VPN клиента — проверять серверы")
             log("бессмысленно, результат будет одинаковым для всех.")
@@ -1239,6 +1690,10 @@ def main() -> int:
         [r for r in results if r.ok],
         key=lambda r: (*country_sort_key(r.server), position.get(r.server.addr, 0)),
     )
+    # Страны в подписке ставим по замеру, а не по подписи провайдера: иначе в
+    # списке остаются узлы, названные «Россия», хотя выходят в Нидерландах.
+    apply_measured_country([(r.server, r.country) for r in working])
+    working.sort(key=lambda r: country_sort_key(r.server))
     log("-" * 62)
     log(f"Готово за {elapsed:.0f} с.  Рабочих: {good} из {len(results)}")
 
@@ -1248,21 +1703,25 @@ def main() -> int:
         return 1
 
     # --- сохранение и публикация
-    working_links = [r.server.link for r in working]
     _write_report(cfg, results, working)
 
     if args.no_publish:
         log("--no-publish: публикация пропущена")
         return 0
 
+    profile = fetch_profile(cfg)
+
     meta = {
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "checked": len(results),
         "working": len(working),
         "duration_seconds": int(elapsed),
-        "subscription": fetch_profile(cfg),
+        "subscription": profile,
+        "page": cfg.get("page", {}),
+        "country_groups": country_groups(r.country for r in working),
         "servers": [server_entry(r.server, r) for r in working],
     }
+    working_links = [r.server.link for r in working]
     log(f"Публикую в {cfg['publish'].get('public_url', '')}...")
     publish(cfg, working_links, meta)
     return 0
@@ -1291,6 +1750,7 @@ def _write_report(cfg: dict, results: list[Result], working: list[Result]) -> No
                 "addr": r.server.addr,
                 "name": r.server.name,
                 "ms": r.ms,
+                "ping": r.ping,
                 "status": r.status,
                 "country": r.country,
                 "exit_ip": r.exit_ip,

@@ -108,6 +108,48 @@ export async function onRequest(context) {
     return json({ allowed });
   }
 
+  // --- настройка подписки: группировка по странам
+  // Живёт в KV, а не в localStorage: переключатель меняет то, что вернёт
+  // Happ, то есть настройка должна быть общей, а не только в этом браузере.
+  const GROUPS_KEY = "wg_groups";
+
+  if (request.method === "GET" && url.searchParams.get("setting") === "groups") {
+    let on = false;
+    if (store) {
+      try {
+        on = (await store.get(GROUPS_KEY)) === "on";
+      } catch {
+        on = false;
+      }
+    }
+    return json({ on });
+  }
+
+  if (request.method === "POST" && url.searchParams.get("setting") === "groups") {
+    // Проверяем пароль так же, как при входе: иначеanyone мог бы включать
+    // и выключать настройку без пароля.
+    let submitted = "";
+    try {
+      const data = await request.json();
+      submitted = String((data && data.password) || "");
+    } catch {
+      return json({ ok: false, error: "bad-request" }, 400);
+    }
+    if (submitted !== password) {
+      return json({ ok: false, error: "wrong-password" }, 401);
+    }
+    if (!store) {
+      return json({ ok: false, error: "no-storage" }, 503);
+    }
+    const on = url.searchParams.get("on") === "1";
+    try {
+      await store.put(GROUPS_KEY, on ? "on" : "off");
+    } catch {
+      return json({ ok: false, error: "no-storage" }, 503);
+    }
+    return json({ ok: true, on });
+  }
+
   // --- сама проверка пароля
   if (request.method === "POST") {
     let submitted = "";

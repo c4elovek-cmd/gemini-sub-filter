@@ -478,25 +478,66 @@ function subscriptionBadge(sub) {
 }
 
 /**
- * Та же плашка, но в одну строку — для зеркала.
+ * Строки с состоянием подписки — по одной на пункт, а не одной простынёй.
  *
  * Зеркало на gist отдаётся как обычный статический файл: заголовков у него
- * не бывает, и клиенту нечего рисовать. Остаётся одно место, где текст
- * виден всегда, — название верхнего узла.
+ * не бывает, и клиенту нечего рисовать. Текст остаётся в содержимом, но
+ * разбит на короткие строки: длинное имя не читается, тем более что список
+ * обрезает его по ширине экрана.
  *
- * Основной адрес остаётся чистым: плашка добавляется только когда функцию
- * вызвали с mirror=1, а зовёт так скрипт наполнения gist. Иначе получился бы
- * дубль того, что карточка на основном адресе и так уже показывает.
+ * Happ показывает каждый элемент массива отдельной строкой списка, поэтому
+ * состояние и подаётся отдельными элементами. Схема у них настоящая, но
+ * подключиться через них нельзя: весь трафик уходит в blackhole.
+ *
+ * Пустой outbounds здесь не годился бы по другой причине: негодная схема
+ * сносит импорт всей подписки целиком вместе с рабочими серверами. Лучше
+ * разобраться и гасить трафик.
+ *
+ * Наполняются только при mirror=1, то есть только для gist. На основном
+ * адресе то же самое рисует карточка из заголовков ответа.
  */
-function buildBadgeLine(sub, serverCount) {
-  // Домен опущен намеренно: он уже стоит в начале названия узла. Время
-  // обновления тоже не вставляем — файл на gist и так назван по дате, а в
-  // строке важнее состояние подписки. Длинное имя всё равно не помещается
-  // в список целиком, и каждый лишний символ съедает видимый текст.
-  const parts = [`Gemini · ${serverCount} серверов`];
-  const state = subscriptionBadge(sub);
-  if (state) parts.push(state);
-  return parts.join(" · ");
+function buildInfoRows(meta, serverCount) {
+  let data = null;
+  try {
+    data = JSON.parse(meta || "null");
+  } catch {
+    return [];
+  }
+  if (!data) return [];
+
+  const sub = data.subscription || {};
+  const used = Number(sub.traffic_used) || 0;
+  const limit = Number(sub.traffic_limit) || 0;
+
+  const labels = [`📊 Gemini · ${serverCount} серверов`];
+  if (used || limit) {
+    labels.push(limit
+      ? `📦 ${formatGb(used)} из ${formatGb(limit)}`
+      : `📦 ${formatGb(used)} · без лимита`);
+  }
+  if (sub.expire_at) {
+    const stamp = formatDateRu(sub.expire_at);
+    if (stamp) labels.push(`📅 до ${stamp}`);
+  }
+  labels.push("🔒 Только где Gemini открывается");
+
+  return labels.map((remarks) => ({
+    remarks,
+    dns: { servers: ["1.1.1.1", "1.0.0.1"], queryStrategy: "UseIP" },
+    routing: {
+      // Правило-ловушка: весь трафик уходит в block, поэтому строка не может
+      // выглядеть рабочей, даже если её случайно выбрали.
+      rules: [{ type: "field", network: "tcp,udp", outboundTag: "block" }],
+      domainMatcher: "hybrid",
+      domainStrategy: "IPIfNonMatch",
+    },
+    inbounds: HAP_INBOUNDS,
+    outbounds: [
+      { tag: "proxy", protocol: "blackhole", settings: {} },
+      HAP_DIRECT,
+      HAP_BLOCK,
+    ],
+  }));
 }
 
 function buildAnnounce(sub, data, serverCount) {
@@ -780,28 +821,12 @@ function buildHapp(servers, meta, groupsOn, mirror) {
   const autoOutbounds = ranked.map((s, i) => toV2RayOutbound(s, "gemini-" + (i + 1)));
   const fastest = ranked.length ? "gemini-1" : "gemini-1";
 
-  // Обычно название короткое: гигабайты, срок и количество серверов показывает
-  // карточка подписки — её рисует клиент из заголовков ответа. Для зеркала на
-  // gist заголовков нет вовсе, и там карточка пустая, поэтому плашку вписываем
-  // прямо в имя верхнего узла. Иначе через зеркало не видно ничего, кроме
-  // адреса хоста и даты.
-  //
-  // meta приходит строкой — orderByMeasuredSpeed разбирает её сам, а плашке
-  // нужен объект. Разбираем здесь же, молчаливый откат на пустую строку.
-  let badge = "";
-  if (mirror) {
-    try {
-      const parsed = JSON.parse(meta || "null");
-      if (parsed) {
-        badge = buildBadgeLine(parsed.subscription || {}, ranked.length);
-      }
-    } catch {
-      badge = "";
-    }
-  }
-  const remarks = badge
-    ? `⚡ c4elovek.online | Автовыбор · ${badge}`
-    : "⚡ c4elovek.online | Автовыбор";
+  // Название короткое и всегда одинаковое: состояние подписки на основном
+  // адресе рисует карточка из заголовков ответа, а на зеркале на gist —
+  // отдельные строки под этим пунктом (см. buildInfoRows). Вписывать всё в
+  // одно имя нельзя: длинную строку в списке не прочитать, её обрезает по
+  // ширине экрана.
+  const remarks = "⚡ c4elovek.online | Автовыбор";
 
   const auto = {
     remarks,
@@ -862,7 +887,17 @@ function buildHapp(servers, meta, groupsOn, mirror) {
 
   // Группы по странам появляются только когда их включили переключателем
   // на странице: по умолчанию список остаётся плоским.
-  return [auto, ...(groupsOn ? buildCountryGroups(ranked, meta) : []), ...singles];
+  // Строки состояния идут сразу под «Автовыбором», чтобы взгляд их находил,
+  // а не искал где-то внизу списка из 80 серверов. Основной адрес их не
+  // получает вовсе: там то же самое рисует карточка подписки.
+  const infoRows = mirror ? buildInfoRows(meta, ranked.length) : [];
+
+  return [
+    auto,
+    ...infoRows,
+    ...(groupsOn ? buildCountryGroups(ranked, meta) : []),
+    ...singles,
+  ];
 }
 
 /**

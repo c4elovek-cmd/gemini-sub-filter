@@ -519,6 +519,11 @@ function buildInfoRows(meta, serverCount) {
     const stamp = formatDateRu(sub.expire_at);
     if (stamp) labels.push(`📅 до ${stamp}`);
   }
+  // Время обновления идёт предпоследним: по нему видно, что список свежий,
+  // а последней строкой остаётся оговорка про Gemini — её читают чаще
+  // всего, и она должна завершать блок.
+  const updated = formatDateTimeRu(data.updated_at);
+  if (updated) labels.push(`🔄 Обновлено ${updated}`);
   labels.push("🔒 Только где Gemini открывается");
 
   return labels.map((remarks) => ({

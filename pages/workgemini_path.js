@@ -1105,39 +1105,41 @@ export async function onRequest(context) {
   const base = {
     ...(await subscriptionInfoHeaders(env, url, servers.length)),
     "Access-Control-Allow-Origin": "*",
-    // Ответ уходит несжатым: клиент должен получить ровно тот формат, который
-    // запрашивал. Со сжатием приходило «неизвестный тип контента» — часть
-    // клиентов не распаковывает тело само. Обрыв в 25 КБ, из-за которого сжатие
-    // включалось, объяснялся не размером, а фильтрацией имени в сети.
-    "Cache-Control": "no-transform, no-cache, no-store, must-revalidate",
-    "Content-Encoding": "identity",
+    // Без no-transform — и это важно. Директива запрещает посредникам любое
+    // преобразование ответа, сжатие включительно: с ней Cloudflare отдавал
+    // подписку несжатой, обрыв на 24,5 КБ никуда не девался. Кэширование при
+    // этом всё равно запрещено, так что побочной пользы от директивы не было.
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    // Ответ разный в зависимости от Accept-Encoding, о чём кэши нужно знать
+    // явно: иначе сжатый мог бы попасть к клиенту, который gzip не понимает.
+    "Vary": "Accept-Encoding",
   };
 
+  // Сжатия здесь нет намеренно: его делает Cloudflare, сам и ровно один раз,
+  // если клиент прислал Accept-Encoding. Проверено на статичной странице того
+  // же сайта — приходит сжатой, одним слоем.
+  //
+  // Отправлять своё сжатие нельзя: край дожимает поверх вторым слоем, и клиент
+  // после одного распаковывания получает не подписку, а «неизвестный тип
+  // контента». Заголовок Content-Encoding тоже не выставляем — им мы бы запретили
+  // сжатие самому краю.
+  //
+  // Это и есть обход обрыва. Замер: с GitHub приходит 153 КБ за 0,3 с, с
+  // Cloudflare передача встаёт ровно на 24,5 КБ и дальше висит до таймаута, при
+  // этом рукопожатие проходит за 0,13 с — режется передача, а не имя в SNI.
+  // Сжатая подписка весит 7 КБ вместо 150 и проходит целиком, вместе с
+  // заголовками карточки.
   const reply = (body, contentType) =>
-    new Response(body, { status: 200, headers: { ...base, "Content-Type": contentType } });
-
-// Служебная выкачка для скрипта: ?gz=1 просит сжатие. Клиентам оно нельзя —
-// часть из них не распаковывает тело само, а скрипту нужно: через домашний
-// канал большие ответы не доезжают, в сжатом виде доходят.
-const wantsGzip = url.searchParams.get("gz") === "1";
-
-async function replyMaybeGzip(body, contentType) {
-  if (!wantsGzip) return reply(body, contentType);
-  try {
-    const stream = new Blob([body]).stream().pipeThrough(new CompressionStream("gzip"));
-    return new Response(stream, {
+    new Response(body, {
       status: 200,
-      headers: {
-        ...base,
-        "Content-Type": contentType,
-        "Content-Encoding": "gzip",
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-      },
+      headers: { ...base, "Content-Type": contentType },
     });
-  } catch {
-    return reply(body, contentType);
-  }
-  }
+
+  // ?gz=1 остаётся только служебной меткой для скрипта наполнения зеркала: по
+  // ней выдача не пишется в журнал доступа. Само сжатие делает край.
+  const isServiceFetch = url.searchParams.get("gz") === "1";
+
+  const replyMaybeGzip = (body, contentType) => reply(body, contentType);
 
   try {
     let body;
@@ -1173,12 +1175,16 @@ async function replyMaybeGzip(body, contentType) {
       contentType = "text/plain; charset=utf-8";
     } else {
       body = buildClash(servers);
-      contentType = "text/yaml; charset=utf-8";
+      // Тип ответа — text/plain, а не text/yaml. Cloudflare сжимает text/plain и
+      // application/json, а вот text/yaml оставляет как есть: подписка в 44 КБ
+      // не проходила обрыв на 24,5 КБ. Клиенту тип ответа не нужен, он читает
+      // тело и разбирает его как YAML сам.
+      contentType = "text/plain; charset=utf-8";
     }
 
     // Служебная выкачка для скрипта в журнал не пишем: это не выдача
     // подписки человеку, а наполнение зеркала.
-    if (!wantsGzip) {
+    if (!isServiceFetch) {
       await accessLog(env, {
         outcome: "delivered",
         ip,

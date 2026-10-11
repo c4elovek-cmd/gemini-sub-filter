@@ -1302,81 +1302,6 @@ def publish_mirror(cfg: dict, links: list[str] | None = None) -> dict[str, str]:
     if not urls:
         log("  ЗЕРКАЛО: не обновилось ни одного формата")
     return urls
-
-
-def publish_yandex_objects(cfg: dict, meta: dict) -> str:
-    """Кладёт выдачу в бакет Yandex Cloud — данные для зеркала-функции.
-
-    Отличие от gist-зеркала принципиальное. Там лежит статический файл, и
-    подписка приходит без единого заголовка: карточка в клиенте собирается
-    именно из заголовков ответа, поэтому на gist её нет. Здесь данные лежат
-    в Object Storage, а отдаёт их функция, которая заголовки добавляет, —
-    карточка выходит целиком, с трафиком, сроком и описанием.
-
-    Саму выдачу забираем с основного адреса: её собирает одна и та же логика,
-    и второе место, где она могла бы с ним разойтись, нам не нужно.
-
-    Каждый объект после записи перечитывается. Object Storage не сообщает об
-    ошибке, если ключ перепутан, — а подписка молча осталась бы старой, и
-    заметить это можно было бы только по жалобе.
-    """
-    yc = ((cfg.get("mirror") or {}).get("yandex") or {})
-    if not yc.get("enabled", True) or not yc.get("bucket"):
-        return ""
-
-    key_path = (yc.get("service_account_key") or "").strip()
-    if not key_path or not os.path.exists(key_path):
-        log("  YANDEX ПРОПУЩЕНО — не задан или не найден service_account_key")
-        return ""
-
-    try:
-        import boto3
-
-        key = json.loads(Path(key_path).read_text(encoding="utf-8"))
-        s3 = boto3.client(
-            "s3",
-            endpoint_url="https://storage.yandexcloud.net",
-            region_name="ru-central1",
-            aws_access_key_id=key["access_key_id"],
-            aws_secret_access_key=key["secret_access_key"],
-        )
-    except Exception as exc:  # noqa: BLE001
-        log(f"  YANDEX ПРОПУЩЕНО — не удалось подключиться к хранилищу: {exc}")
-        return ""
-
-    bucket = yc["bucket"]
-    public_url = cfg["publish"]["public_url"]
-    password = os.environ.get("WG_PASSWORD", "").strip() or (cfg["mirror"].get("password", ""))
-
-    payloads: list[tuple[str, str]] = [
-        ("links.txt", _fetch_gzipped(public_url, password, "links")),
-        ("base64.txt", _fetch_gzipped(public_url, password, "base64")),
-        ("clash.yaml", _fetch_gzipped(public_url, password, "clash")),
-        ("happ.json", _fetch_gzipped(public_url, password, "happ")),
-        # meta кладём из памяти, а не забираем с сайта: так в бакете сразу
-        # правильные трафик, срок и время обновления для карточки.
-        ("meta.json", json.dumps(meta, ensure_ascii=False, indent=2)),
-    ]
-
-    good = 0
-    for key_name, body in payloads:
-        try:
-            s3.put_object(Bucket=bucket, Key=key_name, Body=body.encode("utf-8"),
-                          ContentType="text/plain; charset=utf-8")
-            got = s3.get_object(Bucket=bucket, Key=key_name)["Body"].read().decode("utf-8")
-        except Exception as exc:  # noqa: BLE001
-            log(f"  YANDEX '{key_name}': не записался — {exc}")
-            continue
-        if got == body:
-            good += 1
-        else:
-            log(f"  YANDEX '{key_name}': записано {len(body)} Б, "
-                f"прочитано {len(got)} Б — расхождение")
-
-    log(f"  YANDEX: обновлено {good} из {len(payloads)} объектов в «{bucket}»")
-    return f"https://{yc.get('function', 'gemini-sub')}.functions.yandexcloud.net/{yc.get('token', '')}"
-
-
 def _describe_mirror(cfg: dict) -> None:
     """Ставит описание gist: состояние подписки прямо на странице GitHub.
 
@@ -1486,15 +1411,6 @@ def publish(cfg: dict, links: list[str], meta: dict) -> None:
 
     ok_meta = put("meta", json.dumps(meta_full, ensure_ascii=False, indent=2).encode("utf-8"))
     log(f"  KV 'meta': {'ок' if ok_meta else 'провал'}")
-
-    # Данные для зеркала в Yandex. Основной адрес к этому моменту уже отдаёт
-    # новую выдачу — publish_mirror дождался этого сам.
-    yandex_url = publish_yandex_objects(cfg, meta_full)
-    if yandex_url:
-        meta_full.setdefault("mirror_yandex", yandex_url)
-        put("meta", json.dumps(meta_full, ensure_ascii=False, indent=2).encode("utf-8"))
-
-    _describe_mirror(cfg)
 
     if ok_sub and ok_meta:
         log(f"  Готово. Адрес: {pub['public_url']}")

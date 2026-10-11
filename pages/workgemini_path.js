@@ -477,6 +477,28 @@ function subscriptionBadge(sub) {
   return parts.join(" · ");
 }
 
+/**
+ * Та же плашка, но в одну строку — для зеркала.
+ *
+ * Зеркало на gist отдаётся как обычный статический файл: заголовков у него
+ * не бывает, и клиенту нечего рисовать. Остаётся одно место, где текст
+ * виден всегда, — название верхнего узла.
+ *
+ * Основной адрес остаётся чистым: плашка добавляется только когда функцию
+ * вызвали с mirror=1, а зовёт так скрипт наполнения gist. Иначе получился бы
+ * дубль того, что карточка на основном адресе и так уже показывает.
+ */
+function buildBadgeLine(sub, serverCount) {
+  // Домен опущен намеренно: он уже стоит в начале названия узла. Время
+  // обновления тоже не вставляем — файл на gist и так назван по дате, а в
+  // строке важнее состояние подписки. Длинное имя всё равно не помещается
+  // в список целиком, и каждый лишний символ съедает видимый текст.
+  const parts = [`Gemini · ${serverCount} серверов`];
+  const state = subscriptionBadge(sub);
+  if (state) parts.push(state);
+  return parts.join(" · ");
+}
+
 function buildAnnounce(sub, data, serverCount) {
   const lines = [];
 
@@ -753,16 +775,36 @@ const key = (s) => `${s.server}:${s.port}`;
   });
 }
 
-function buildHapp(servers, meta, groupsOn) {
+function buildHapp(servers, meta, groupsOn, mirror) {
   const ranked = orderByMeasuredSpeed(servers, meta);
   const autoOutbounds = ranked.map((s, i) => toV2RayOutbound(s, "gemini-" + (i + 1)));
   const fastest = ranked.length ? "gemini-1" : "gemini-1";
 
+  // Обычно название короткое: гигабайты, срок и количество серверов показывает
+  // карточка подписки — её рисует клиент из заголовков ответа. Для зеркала на
+  // gist заголовков нет вовсе, и там карточка пустая, поэтому плашку вписываем
+  // прямо в имя верхнего узла. Иначе через зеркало не видно ничего, кроме
+  // адреса хоста и даты.
+  //
+  // meta приходит строкой — orderByMeasuredSpeed разбирает её сам, а плашке
+  // нужен объект. Разбираем здесь же, молчаливый откат на пустую строку.
+  let badge = "";
+  if (mirror) {
+    try {
+      const parsed = JSON.parse(meta || "null");
+      if (parsed) {
+        badge = buildBadgeLine(parsed.subscription || {}, ranked.length);
+      }
+    } catch {
+      badge = "";
+    }
+  }
+  const remarks = badge
+    ? `⚡ c4elovek.online | Автовыбор · ${badge}`
+    : "⚡ c4elovek.online | Автовыбор";
+
   const auto = {
-    // Название остаётся коротким: гигабайты и срок показывает карточка
-    // подписки — их рисует клиент из заголовков ответа. Вписывать то же
-    // в имя узла незачем: получается дубль и глаз цепляется не за то.
-    remarks: "⚡ c4elovek.online | Автовыбор",
+    remarks,
     dns: {
       servers: ["https://1.1.1.1/dns-query", "1.1.1.1", "8.8.8.8"],
       queryStrategy: "UseIPv4",
@@ -1077,7 +1119,11 @@ async function replyMaybeGzip(body, contentType) {
       } catch {
         groupsOn = false;
       }
-      body = JSON.stringify(buildHapp(servers, meta, groupsOn));
+      // mirror=1 просит вписать плашку в имя верхнего узла. Ставит только
+      // скрипт наполнения gist: основной адрес отдаёт ту же выдачу без
+      // плашки, потому что там её рисует карточка из заголовков.
+      const mirror = url.searchParams.get("mirror") === "1";
+      body = JSON.stringify(buildHapp(servers, meta, groupsOn, mirror));
       contentType = "application/json; charset=utf-8";
     } else if (format === "base64" || format === "b64") {
       // Оставлено для клиентов, которым base64 обязателен: сам Happ и

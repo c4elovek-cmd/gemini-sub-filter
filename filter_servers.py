@@ -1170,16 +1170,24 @@ def _wait_until_published(public_url: str, password: str, links: list[str],
     return False
 
 
-def _fetch_gzipped(url: str, password: str, fmt: str, timeout: int = 90) -> str:
+def _fetch_gzipped(url: str, password: str, fmt: str, timeout: int = 90,
+                   mirror: bool = False) -> str:
     """Забирает выдачу сайта в сжатом виде и распаковывает.
 
     Форматы строит не этот скрипт, а функция сайта: если собирать их здесь,
     через месяц-другой две реализации разойдутся, и зеркало начнёт отдавать
     не то же, что основная ссылка. Сжатие нужно потому, что через домашний
     канал несжатые ответы не доезжают — обрывается примерно на 25 КБ.
+
+    mirror=True добавляет mirror=1: плашка с количеством серверов, трафиком
+    и сроком вписывается в имя верхнего узла. Нужна только gist — там
+    статический файл без заголовков, и карточка подписки остаётся пустой.
+    Основной адрес отдаёт ту же выдачу без плашки: там её рисует карточка.
     """
     sep = "&" if "?" in url else "?"
     target = f"{url.rstrip('/')}/{password}{sep}format={fmt}&gz=1"
+    if mirror:
+        target += "&mirror=1"
     req = urllib.request.Request(target, headers={
         "User-Agent": "gemini-sub-filter/1.0 (mirror)",
         "Accept-Encoding": "gzip",
@@ -1256,8 +1264,11 @@ def publish_mirror(cfg: dict, links: list[str] | None = None) -> dict[str, str]:
     _wait_until_published(public_url, password, links or [])
 
     for fmt, filename in files.items():
+        # Плашка в имя верхнего узла нужна только Happ: у Clash своя группа
+        # узлов, у обычных ссылок вообще нет верхнего пункта. А вот на gist
+        # именно у Happ и пустая карточка подписки — там нет заголовков.
         try:
-            body = _fetch_gzipped(public_url, password, fmt)
+            body = _fetch_gzipped(public_url, password, fmt, mirror=(fmt == "happ"))
         except Exception as exc:  # noqa: BLE001
             log(f"  ЗЕРКАЛО '{fmt}': не забрал выдачу — {exc}")
             continue

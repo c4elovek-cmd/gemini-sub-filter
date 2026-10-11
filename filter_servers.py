@@ -35,7 +35,7 @@ import urllib.request
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Windows-консоль по умолчанию не умеет UTF-8 — чиним, иначе эмодзи в логах роняют вывод
@@ -1320,7 +1320,11 @@ def _describe_mirror(cfg: dict) -> None:
         return
 
     badge = subscription_badge(profile)
-    stamp = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M")
+    # Московское время, а не UTC: в подписи стоит «(МСК)», и по UTC часы
+    # уезжали на три назад. Москва не переводит часы, поэтому смещение
+    # фиксированное и не зависит от того, включён ли перевод времени.
+    stamp = datetime.now(timezone.utc).astimezone(
+        timezone(timedelta(hours=3))).strftime("%d.%m.%Y %H:%M")
     description = (
         "⚡ Подписка, отфильтрованная по реальной доступности Gemini."
         + (f" {badge}" if badge else "")
@@ -1411,6 +1415,10 @@ def publish(cfg: dict, links: list[str], meta: dict) -> None:
 
     ok_meta = put("meta", json.dumps(meta_full, ensure_ascii=False, indent=2).encode("utf-8"))
     log(f"  KV 'meta': {'ок' if ok_meta else 'провал'}")
+
+    # Описание gist обновляем после meta: в нём пишется время обновления
+    # выдачи, и оно должно совпадать с тем, что уже опубликовано.
+    _describe_mirror(cfg)
 
     if ok_sub and ok_meta:
         log(f"  Готово. Адрес: {pub['public_url']}")
